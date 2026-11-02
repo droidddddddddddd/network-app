@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from sqlalchemy import (String, Integer, Text, Boolean, DateTime, ForeignKey, Float,
+from sqlalchemy import (String, Integer, Text, Boolean, DateTime, ForeignKey, Float, LargeBinary, BigInteger,
                         UniqueConstraint, CheckConstraint, Index)
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base
@@ -23,7 +23,8 @@ OPP_CATS = ["KOL partnerships", "Marketing campaigns", "Project launches", "Rese
 SHARE_KEYS = ["share_announcements", "share_selected", "share_opportunities", "share_events", "share_activity", "display_public"]
 # Configurable admin permissions (founder always has all)
 ADMIN_PERMS = ["perm_members", "perm_announce", "perm_connections", "perm_settings", "perm_moderate", "perm_opportunities"]
-VERIFY_KINDS = ["wallet", "identity", "project", "trading"]
+VERIFY_KINDS = ["wallet", "identity", "project", "trading", "devwallet", "metadata"]
+ACTIVITY_TYPES = ["new_members", "opportunities_filled", "launches", "events", "achievements"]
 USER_ROLES = ["Trader", "Founder", "KOL", "Developer", "Marketer", "Researcher", "Community builder", "Investor"]
 PRIVACY_KEYS = ["show_wallet", "show_socials", "show_networks", "show_endorsements", "show_contributions", "show_achievements"]
 PROJECT_STAGES = ["Idea", "Community", "Connections", "Launch", "Growth"]
@@ -55,6 +56,8 @@ class User(Base):
     wallet_verified: Mapped[bool] = mapped_column(Boolean, default=False)
     identity_verified: Mapped[bool] = mapped_column(Boolean, default=False)
     is_demo: Mapped[bool] = mapped_column(Boolean, default=False)
+    suspended_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    suspend_reason: Mapped[str] = mapped_column(String(300), default="")
     created_at: Mapped[datetime] = TS()
 
 
@@ -146,6 +149,8 @@ class Connection(Base):
     tgt_share_events: Mapped[bool] = mapped_column(Boolean, default=False)
     tgt_share_activity: Mapped[bool] = mapped_column(Boolean, default=False)
     tgt_display_public: Mapped[bool] = mapped_column(Boolean, default=False)
+    req_activity_types: Mapped[str] = mapped_column(String(200), default="")  # comma list of ACTIVITY_TYPES the requester shares
+    tgt_activity_types: Mapped[str] = mapped_column(String(200), default="")
     created_at: Mapped[datetime] = TS()
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -165,6 +170,7 @@ class Post(Base):
     share_with_connections: Mapped[bool] = mapped_column(Boolean, default=False)
     tags: Mapped[str] = mapped_column(String(500), default="")  # space separated $TICKERS / #tags / addresses
     removed: Mapped[bool] = mapped_column(Boolean, default=False)
+    hidden: Mapped[bool] = mapped_column(Boolean, default=False)  # hidden by a moderator (visible to author only)
     edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     is_demo: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = TS()
@@ -179,12 +185,22 @@ class Like(Base):
 
 
 class Report(Base):
+    """A report about a post, user or Network. Post reports inside a Network go to that Network's moderators;
+    everything is also visible to platform admins (ADMIN_USERNAMES)."""
     __tablename__ = "reports"
-    __table_args__ = (UniqueConstraint("reporter_id", "post_id"),)
+    __table_args__ = (UniqueConstraint("reporter_id", "target_type", "target_id"),
+                      CheckConstraint("target_type in ('post','user','network')"), Index("ix_reports_status", "status"))
     id: Mapped[int] = mapped_column(primary_key=True)
     reporter_id: Mapped[int] = FK("users.id")
-    post_id: Mapped[int] = FK("posts.id", index=True)
+    target_type: Mapped[str] = mapped_column(String(10), default="post")
+    target_id: Mapped[int] = mapped_column(Integer, default=0)
+    post_id: Mapped[int | None] = FK("posts.id", nullable=True, index=True)
+    network_id: Mapped[int | None] = FK("networks.id", nullable=True, index=True)  # moderation scope
     reason: Mapped[str] = mapped_column(String(300))
+    status: Mapped[str] = mapped_column(String(10), default="open")
+    resolution: Mapped[str] = mapped_column(String(40), default="")
+    resolved_by: Mapped[int | None] = FK("users.id", nullable=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = TS()
 
 
@@ -337,8 +353,8 @@ class Verification(Base):
     Providers are pluggable; in this beta no external provider is connected, so nothing is marked verified
     except trading performance, which comes from the platform's own DexScreener tracker (computed, not stored)."""
     __tablename__ = "verifications"
-    __table_args__ = (CheckConstraint("kind in ('wallet','identity','project','trading')"),
-                      CheckConstraint("status in ('pending','verified','rejected','revoked')"),
+    __table_args__ = (CheckConstraint("kind in ('wallet','identity','project','trading','devwallet','metadata')"),
+                      CheckConstraint("status in ('pending','verified','rejected','revoked','failed')"),
                       CheckConstraint("subject_type in ('user','network')"), Index("ix_verif_subject", "subject_type", "subject_id"))
     id: Mapped[int] = mapped_column(primary_key=True)
     subject_type: Mapped[str] = mapped_column(String(10))
@@ -348,6 +364,10 @@ class Verification(Base):
     provider: Mapped[str] = mapped_column(String(40), default="")
     detail: Mapped[str] = mapped_column(String(300), default="")
     requested_by: Mapped[int | None] = FK("users.id", nullable=True)
+    method: Mapped[str] = mapped_column(String(80), default="")      # e.g. "ed25519 signMessage", "pump.fun bonding curve creator"
+    value: Mapped[str] = mapped_column(String(200), default="")      # wallet / mint / domain being verified
+    address: Mapped[str] = mapped_column(String(64), default="")     # signing wallet
+    challenge: Mapped[str] = mapped_column(String(80), default="")   # domain token
     created_at: Mapped[datetime] = TS()
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -387,4 +407,93 @@ class AuditLog(Base):
     target: Mapped[str] = mapped_column(String(120), default="")
     detail: Mapped[str] = mapped_column(String(500), default="")
     ip: Mapped[str] = mapped_column(String(45), default="")
+    created_at: Mapped[datetime] = TS()
+
+
+class Nonce(Base):
+    """One-time sign-in-with-Solana style challenge. Only message signing; never a transaction."""
+    __tablename__ = "nonces"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = FK("users.id", index=True)
+    purpose: Mapped[str] = mapped_column(String(20))
+    nonce: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    message: Mapped[str] = mapped_column(Text)
+    address: Mapped[str] = mapped_column(String(64), default="")
+    subject: Mapped[str] = mapped_column(String(120), default="")  # mint / network slug / claim id
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = TS()
+
+
+class Media(Base):
+    """Uploaded images stored in the database (default in production; survives Render's ephemeral disk)."""
+    __tablename__ = "media"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    key: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    content_type: Mapped[str] = mapped_column(String(40))
+    size: Mapped[int] = mapped_column(Integer)
+    data: Mapped[bytes] = mapped_column(LargeBinary)
+    owner_id: Mapped[int | None] = FK("users.id", nullable=True)
+    created_at: Mapped[datetime] = TS()
+
+
+class RateHit(Base):
+    """DB-backed sliding-window rate limiting: safe across processes / instances."""
+    __tablename__ = "rate_hits"
+    __table_args__ = (Index("ix_rate_key_ts", "key", "ts"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    key: Mapped[str] = mapped_column(String(160))
+    ts: Mapped[float] = mapped_column(Float)
+
+
+class RankingSnapshot(Base):
+    __tablename__ = "ranking_snapshots"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    key: Mapped[str] = mapped_column(String(40), default="", index=True)
+    data: Mapped[str] = mapped_column(Text)
+    computed_at: Mapped[datetime] = TS()
+
+
+class NetworkActivity(Base):
+    """Structured activity updates a Network can selectively share with connected Networks."""
+    __tablename__ = "network_activity"
+    __table_args__ = (Index("ix_activity_net", "network_id", "created_at"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    network_id: Mapped[int] = FK("networks.id")
+    type: Mapped[str] = mapped_column(String(30))
+    text: Mapped[str] = mapped_column(String(300))
+    link: Mapped[str] = mapped_column(String(200), default="")
+    created_at: Mapped[datetime] = TS()
+
+
+class CtoClaim(Base):
+    """A Project Network's community-takeover claim on a token mint, backed by signed holder wallets."""
+    __tablename__ = "cto_claims"
+    __table_args__ = (UniqueConstraint("network_id", "mint"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    network_id: Mapped[int] = FK("networks.id", index=True)
+    mint: Mapped[str] = mapped_column(String(64), index=True)
+    symbol: Mapped[str] = mapped_column(String(30), default="")
+    created_by: Mapped[int] = FK("users.id")
+    status: Mapped[str] = mapped_column(String(10), default="active")
+    verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    backers_count: Mapped[int] = mapped_column(Integer, default=0)
+    backed_pct: Mapped[float] = mapped_column(Float, default=0)
+    result: Mapped[str] = mapped_column(Text, default="")  # JSON of the last evaluation
+    last_checked: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = TS()
+
+
+class CtoBacking(Base):
+    """One backing per wallet per mint (switching moves it). Balances are read live at evaluation time."""
+    __tablename__ = "cto_backings"
+    __table_args__ = (UniqueConstraint("mint", "wallet"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    claim_id: Mapped[int] = FK("cto_claims.id", index=True)
+    mint: Mapped[str] = mapped_column(String(64), index=True)
+    wallet: Mapped[str] = mapped_column(String(64))
+    user_id: Mapped[int] = FK("users.id")
+    signature: Mapped[str] = mapped_column(String(120))
+    first_seen: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    first_funder: Mapped[str] = mapped_column(String(64), default="")
     created_at: Mapped[datetime] = TS()

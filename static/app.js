@@ -77,7 +77,7 @@ function shell() {
       <a class="logo" href="#/"><img src="/static/img/logo.svg" alt="">NETWORK</a>
       <nav class="nav" id="nav">${NAV.map(([i, l, h, k]) => `<a href="${h}" data-k="${k}">${ic(i)}<span>${l}</span><span class="badge hidden" data-badge="${k}"></span></a>`).join('')}</nav>
       <div class="card" id="side-trending"><h3>${ic('fire')} Network Pulse</h3><div class="muted small">Loading…</div></div>
-      <div class="tiny muted" style="padding:0 6px"><a href="#/about">About</a> · <a href="#/rankings">How rankings work</a> · <a href="#/rewards">Rewards</a></div>
+      <div class="tiny muted" style="padding:0 6px"><a href="#/about">About</a> · <a href="#/rankings">How rankings work</a> · <a href="#/achievements">Achievements</a>${me && me.is_platform_admin ? ' · <a href="#/moderation">Moderation</a>' : ''}</div>
     </aside>
     <div class="main">
       <header class="top">
@@ -244,6 +244,9 @@ const ADMIN_LABELS = { perm_members: 'Manage members, requests & invites', perm_
   perm_settings: 'Edit Network settings', perm_moderate: 'Remove posts (moderation)', perm_opportunities: 'Publish & manage opportunities' };
 const permBoxes = (labels, cur = {}) => Object.entries(labels).map(([k, l]) => `<label class="row small" style="margin:6px 0"><input type="checkbox" name="${k}" ${cur[k] ? 'checked' : ''}> ${l}</label>`).join('');
 const readBoxes = (f, labels) => Object.fromEntries(Object.keys(labels).map(k => [k, !!f.elements[k].checked]));
+const ACT_LABELS = { new_members: 'New members', opportunities_filled: 'Opportunities filled', launches: 'Launches', events: 'Events', achievements: 'Achievements' };
+const actBoxes = (cur = []) => `<b class="small">Activity updates to share:</b><div class="chips">${Object.entries(ACT_LABELS).map(([k, l]) => `<label class="chip"><input type="checkbox" name="act_${k}" ${cur.includes(k) ? 'checked' : ''}> ${l}</label>`).join('')}</div>`;
+const shareRead = f => ({ ...shareRead(f), activity_types: Object.keys(ACT_LABELS).filter(k => f.elements['act_' + k].checked) });
 
 function callModal(networkId) {
   modal(`<h3>Post a token call</h3><p class="small muted">Entry price is read from DexScreener by the server at the moment you post. You can't edit it. Results are then tracked independently.</p>
@@ -270,7 +273,7 @@ document.addEventListener('click', async e => {
     if (a === 'close-modal') return closeModal();
     if (a === 'usermenu' || a === 'create-menu' || a === 'postmenu') {
       e.stopPropagation(); document.querySelectorAll('.menu-list').forEach(m => m.remove());
-      const items = a === 'usermenu' ? [['#/me', 'My Network Passport'], ['#/settings', 'Edit profile & privacy'], ['#/rewards', 'Rewards'], ['logout', 'Log out']]
+      const items = a === 'usermenu' ? [['#/me', 'My Network Passport'], ['#/settings', 'Edit profile & privacy'], ['#/achievements', 'Achievements & XP'], ...(S.me && S.me.is_platform_admin ? [['#/moderation', 'Platform moderation']] : []), ['logout', 'Log out']]
         : a === 'create-menu' ? [['#/compose', 'Network Post'], ['call', 'Token call'], ['#/create-network', 'Create a Network'], ['#/opportunities/new', 'Opportunity']]
         : [['copy', 'Copy link'], ...(S.me && t.dataset.author === S.me.username ? [['edit', 'Edit'], ['delete', 'Delete']] : S.me ? [['report', 'Report'], ['delete', 'Remove (Network admin)'], ['block', `Block @${t.dataset.author}`]] : [])];
       const m = document.createElement('div'); m.className = 'menu-list';
@@ -289,7 +292,7 @@ document.addEventListener('click', async e => {
           const f = $('#ef', c); f.addEventListener('submit', ev => { ev.preventDefault(); submitForm(f, async () => { await api('/posts/' + id, { method: 'PUT', body: { body: fval(f, 'body') } }); closeModal(); toast('Post updated'); route(); }); }); });
       }
       if (k === 'delete') { if (!confirm('Remove this post?')) return; await api('/posts/' + id, { method: 'DELETE' }); toast('Post removed'); document.querySelectorAll(`[data-post="${id}"]`).forEach(x => x.remove()); return; }
-      if (k === 'report') { const r = prompt('Why are you reporting this post? (3–300 characters)'); if (!r) return; await api(`/posts/${id}/report`, { body: { reason: r } }); return toast('Reported to the Network admins. Thanks.'); }
+      if (k === 'report') { const r = prompt('Why are you reporting this post? (3–300 characters)'); if (!r) return; await api('/reports', { body: { target_type: 'post', target: String(id), reason: r } }); return toast('Reported to moderators. You\'ll be notified when it\'s reviewed.'); }
       if (k === 'block') { if (!confirm(`Block @${t.dataset.author}? You won't see each other's posts or messages.`)) return; await api(`/users/${t.dataset.author}/block`, { body: {} }); toast('Blocked'); return route(); }
     }
     if (a === 'like') { if (!need()) return; const r = await api(`/posts/${id}/like`, { body: {} }); t.classList.toggle('liked', r.liked); t.querySelector('span').textContent = kfmt(r.likes); return; }
@@ -338,7 +341,7 @@ async function route() {
     S.route = r.k || '';
     const c = $('#center'); c.innerHTML = '<div class="card empty">Loading…</div>';
     window.scrollTo(0, 0);
-    try { await r.fn(c, ...m.slice(1).map(x => x == null ? undefined : decodeURIComponent(x))); } catch (e) { c.innerHTML = `<div class="card empty"><b>${esc(e.status === 404 ? 'Not found' : e.status === 403 ? 'No access' : 'Something went wrong')}</b><p class="muted">${esc(e.message)}</p><a class="btn" href="#/">Back to My Network</a></div>`; }
+    try { await r.fn(c, ...m.slice(1).map(x => x == null ? undefined : decodeURIComponent(x))); if (typeof suspendedBanner === 'function') suspendedBanner(c); } catch (e) { c.innerHTML = `<div class="card empty"><b>${esc(e.status === 404 ? 'Not found' : e.status === 403 ? 'No access' : 'Something went wrong')}</b><p class="muted">${esc(e.message)}</p><a class="btn" href="#/">Back to My Network</a></div>`; }
     if (!r.bare && !r.wide) rightCol().catch(() => {});
     return;
   }
@@ -507,12 +510,12 @@ on(/^\/n\/([a-z0-9-]+)(?:\/(\w+))?$/, async (c, slug, tab = 'feed') => {
   const tabs = [['feed', 'Network Posts'], ['announcements', 'Announcements'], ['events', 'Events'],
     ...(member ? [['chat', 'Chat'], ['connected', 'From Connected Networks']] : []),
     ...(n.type === 'Project' ? [['launch', 'Launch Room']] : []), ['members', 'Network Members'], ['connections', 'Connected Networks'], ['reputation', 'Reputation'],
-    ...(P_.perm_settings || P_.perm_members ? [['settings', 'Settings']] : [])];
+    ...(P_.perm_moderate ? [['moderation', 'Moderation']] : []), ...(P_.perm_settings || P_.perm_members ? [['settings', 'Settings']] : [])];
   c.innerHTML = `<div class="nethead"><div class="cover">${n.cover_url ? `<img src="${esc(n.cover_url)}" alt="">` : ''}</div><div class="info">
     <div class="row between wrap" style="align-items:flex-end">${netAv(n, 'lg')}<div class="row wrap">
       ${member ? (n.my_role === 'founder' ? '<span class="pill g">Network Founder</span>' : `<span class="pill g">${n.my_role === 'admin' ? 'Network Admin' : 'Member'}</span><button class="btn sm" data-act="leave" data-slug="${esc(n.slug)}">Leave</button>`)
         : n.my_status === 'pending' ? '<span class="pill a">Request pending</span>' : S.me ? `<button class="btn primary sm" data-act="join" data-slug="${esc(n.slug)}">${n.is_private ? 'Request to join' : 'Join Network'}</button>` : '<a class="btn primary sm" href="#/login">Log in to join</a>'}
-      ${P_.perm_connections ? '<button class="btn ghost sm" id="connreq">Connect Networks</button>' : ''}</div></div>
+      ${P_.perm_connections ? '<button class="btn ghost sm" id="connreq">Connect Networks</button>' : ''}${S.me && !member ? `<button class="btn ghost sm" data-report="network" data-target="${esc(n.slug)}">Report</button>` : ''}</div></div>
     <h2 style="margin:8px 0 0">${esc(n.name)} ${n.project_verified ? vbadge('Project verified') : ''}${demo(n)}</h2>
     <div class="small muted">@${esc(n.slug)} · ${esc(n.type)} · ${n.is_private ? '🔒 Private' : 'Public'} · Founded by <a class="green" href="#/u/${esc(n.founder.username)}">@${esc(n.founder.username)}</a> · ${new Date(n.created_at).toLocaleDateString()}</div>
     <p style="margin:8px 0">${rich(n.description)}</p>
@@ -526,7 +529,8 @@ on(/^\/n\/([a-z0-9-]+)(?:\/(\w+))?$/, async (c, slug, tab = 'feed') => {
     bindComposer(() => route());
     await loadFeed($('#nf'), `/networks/${n.slug}/feed${tab === 'announcements' ? '?kind=announcement' : ''}`, tab === 'announcements' ? 'No announcements yet.' : 'No Network Posts yet.');
   } else if (tab === 'connected') {
-    el.innerHTML = '<p class="small muted">Only what connected Networks explicitly chose to share with this Network appears here.</p><div id="nf"></div>';
+    el.innerHTML = '<p class="small muted">Only what connected Networks explicitly chose to share with this Network appears here.</p><div id="actf"></div><div id="nf"></div>';
+    connectedActivity($('#actf'));
     await loadFeed($('#nf'), `/networks/${n.slug}/feed?kind=connected`, 'Connected Networks haven\'t shared anything with this Network yet.');
   } else if (tab === 'chat') {
     S.chatNet = n.slug;
@@ -541,6 +545,7 @@ on(/^\/n\/([a-z0-9-]+)(?:\/(\w+))?$/, async (c, slug, tab = 'feed') => {
   else if (tab === 'connections') connectionsTab(el, n, P_);
   else if (tab === 'reputation') repTab(el, n.reputation, n.verification);
   else if (tab === 'settings') await settingsTab(el, n, P_);
+  else if (tab === 'moderation') await modQueue(el, n.slug);
 }, { k: 'networks' });
 
 function appendChat(m) {
@@ -578,13 +583,13 @@ function launchTab(el, n, P_) {
       <label class="f"><span>Roadmap</span><textarea class="in" name="roadmap" rows="4" maxlength="3000">${esc(n.roadmap)}</textarea></label>
       <label class="f"><span>Token contract (optional)</span><input class="in" name="token_address" maxlength="64" value="${esc(n.token_address)}"></label>
       <div class="err"></div><button class="btn primary" type="submit">Save Launch Room</button>
-      ${n.my_role === 'founder' && !n.project_verified ? ' <button class="btn ghost" type="button" id="pverify">Request project verification</button>' : ''}</form>` : ''}`;
+</form>` : ''}<div id="ttp"></div>`;
+  tokenTrustPanel($('#ttp'), n, P_);
   const f = $('#lrf');
   f && f.addEventListener('submit', e => { e.preventDefault(); submitForm(f, async () => {
     const la = fval(f, 'launch_at');
     await api('/networks/' + n.slug, { method: 'PUT', body: { stage: fval(f, 'stage'), launch_at: la ? new Date(la).toISOString() : null, team_info: fval(f, 'team_info'), roadmap: fval(f, 'roadmap'), token_address: fval(f, 'token_address') } });
     toast('Launch Room saved'); route(); }); });
-  $('#pverify')?.addEventListener('click', async () => { try { const r = await api('/verifications', { body: { kind: 'project', network_slug: n.slug } }); toast('Request recorded: ' + r.detail); route(); } catch (e) { fail(e); } });
 }
 
 async function membersTab(el, n, P_) {
@@ -611,7 +616,7 @@ async function membersTab(el, n, P_) {
   }
 }
 
-const shareList = s => s ? Object.entries(SHARE_LABELS).filter(([k]) => s[k]).map(([, l]) => l).join(', ') || 'Nothing shared' : '';
+const shareList = s => s ? [...Object.entries(SHARE_LABELS).filter(([k]) => s[k]).map(([, l]) => l), ...(s.activity_types || []).map(k => 'Activity: ' + ACT_LABELS[k])].join(', ') || 'Nothing shared' : '';
 function connectionsTab(el, n, P_) {
   const cs = n.connections;
   const item = x => `<div class="li" style="align-items:flex-start">${netAv(x.network)}<div class="grow"><a href="#/n/${esc(x.network.slug)}"><b>${esc(x.network.name)}</b></a> <span class="pill ${x.status === 'approved' ? 'g' : 'a'}">${x.status === 'approved' ? 'Connected' : x.incoming ? 'Incoming request' : 'Request sent'}</span>
@@ -620,20 +625,20 @@ function connectionsTab(el, n, P_) {
   el.innerHTML = `<div class="card"><h3 style="margin-top:0">Connected Networks</h3><p class="tiny muted">Connecting never exposes private content. Each Network chooses exactly what it shares, and the server enforces it.</p>${cs.map(item).join('') || '<p class="muted small">No connections yet.</p>'}${P_.perm_connections ? '<button class="btn ghost sm" id="cn2">Connect with another Network</button>' : ''}</div>`;
   $('#cn2')?.addEventListener('click', () => connectModal(n));
   el.querySelectorAll('[data-cd]').forEach(b => b.onclick = () => { const x = cs.find(c => c.id == b.dataset.cd);
-    modal(`<h3>${esc(x.network.name)} wants to connect</h3>${x.message ? `<p>“${esc(x.message)}”</p>` : ''}<p class="small muted">They share with you: ${esc(shareList(x.they_share))}</p><form id="df"><b class="small">What ${esc(n.name)} shares with them:</b>${permBoxes(SHARE_LABELS)}<div class="err"></div><div class="row"><button class="btn primary" type="submit">Approve</button><button class="btn danger" type="button" id="rej">Reject</button></div></form>`, c2 => {
+    modal(`<h3>${esc(x.network.name)} wants to connect</h3>${x.message ? `<p>“${esc(x.message)}”</p>` : ''}<p class="small muted">They share with you: ${esc(shareList(x.they_share))}</p><form id="df"><b class="small">What ${esc(n.name)} shares with them:</b>${permBoxes(SHARE_LABELS)}${actBoxes()}<div class="err"></div><div class="row"><button class="btn primary" type="submit">Approve</button><button class="btn danger" type="button" id="rej">Reject</button></div></form>`, c2 => {
       const f = $('#df', c2);
-      f.addEventListener('submit', e => { e.preventDefault(); submitForm(f, async () => { await api(`/connections/${x.id}/decide`, { body: { action: 'approve', permissions: readBoxes(f, SHARE_LABELS) } }); closeModal(); toast('Networks connected'); route(); }); });
+      f.addEventListener('submit', e => { e.preventDefault(); submitForm(f, async () => { await api(`/connections/${x.id}/decide`, { body: { action: 'approve', permissions: shareRead(f) } }); closeModal(); toast('Networks connected'); route(); }); });
       $('#rej', c2).onclick = async () => { try { await api(`/connections/${x.id}/decide`, { body: { action: 'reject' } }); closeModal(); toast('Request rejected'); route(); } catch (e) { fail(e); } }; }); });
   el.querySelectorAll('[data-cp]').forEach(b => b.onclick = () => { const x = cs.find(c => c.id == b.dataset.cp);
-    modal(`<h3>What ${esc(n.name)} shares with ${esc(x.network.name)}</h3><form id="spf">${permBoxes(SHARE_LABELS, x.we_share)}<div class="err"></div><button class="btn primary" type="submit">Save sharing permissions</button></form>`, c2 => {
-      const f = $('#spf', c2); f.addEventListener('submit', e => { e.preventDefault(); submitForm(f, async () => { await api(`/connections/${x.id}/permissions`, { method: 'PUT', body: readBoxes(f, SHARE_LABELS) }); closeModal(); toast('Sharing updated'); route(); }); }); }); });
+    modal(`<h3>What ${esc(n.name)} shares with ${esc(x.network.name)}</h3><form id="spf">${permBoxes(SHARE_LABELS, x.we_share)}${actBoxes(x.we_share.activity_types || [])}<div class="err"></div><button class="btn primary" type="submit">Save sharing permissions</button></form>`, c2 => {
+      const f = $('#spf', c2); f.addEventListener('submit', e => { e.preventDefault(); submitForm(f, async () => { await api(`/connections/${x.id}/permissions`, { method: 'PUT', body: shareRead(f) }); closeModal(); toast('Sharing updated'); route(); }); }); }); });
   el.querySelectorAll('[data-cx]').forEach(b => b.onclick = async () => { if (!confirm('Remove this connection?')) return; try { await api('/connections/' + b.dataset.cx, { method: 'DELETE' }); toast('Removed'); route(); } catch (e) { fail(e); } });
 }
 function connectModal(n) {
   modal(`<h3>Connect ${esc(n.name)} with another Network</h3><form id="crf"><label class="f"><span>Network handle</span><input class="in" name="target" required maxlength="40" placeholder="e.g. sol-alpha" list="netlist"><datalist id="netlist"></datalist></label>
-    <label class="f"><span>Message</span><textarea class="in" name="message" maxlength="500" rows="2"></textarea></label><b class="small">What ${esc(n.name)} will share with them:</b>${permBoxes(SHARE_LABELS)}<div class="err"></div><button class="btn primary" type="submit">Send connection request</button></form>`, c2 => {
+    <label class="f"><span>Message</span><textarea class="in" name="message" maxlength="500" rows="2"></textarea></label><b class="small">What ${esc(n.name)} will share with them:</b>${permBoxes(SHARE_LABELS)}${actBoxes()}<div class="err"></div><button class="btn primary" type="submit">Send connection request</button></form>`, c2 => {
     api('/networks').then(l => $('#netlist', c2).innerHTML = l.filter(x => x.slug !== n.slug).map(x => `<option value="${esc(x.slug)}">${esc(x.name)}</option>`).join('')).catch(() => {});
-    const f = $('#crf', c2); f.addEventListener('submit', e => { e.preventDefault(); submitForm(f, async () => { await api(`/networks/${n.slug}/connections`, { body: { target_slug: fval(f, 'target'), message: fval(f, 'message'), permissions: readBoxes(f, SHARE_LABELS) } }); closeModal(); toast('Connection request sent'); location.hash = `#/n/${n.slug}/connections`; route(); }); }); });
+    const f = $('#crf', c2); f.addEventListener('submit', e => { e.preventDefault(); submitForm(f, async () => { await api(`/networks/${n.slug}/connections`, { body: { target_slug: fval(f, 'target'), message: fval(f, 'message'), permissions: shareRead(f) } }); closeModal(); toast('Connection request sent'); location.hash = `#/n/${n.slug}/connections`; route(); }); }); });
 }
 function indicCard(title, v, detail, fmt = x => x) { return `<div class="card"><div class="tiny muted">${esc(title)}</div><div class="v">${v == null ? '—' : fmt(v)}</div><div class="tiny muted">${esc(typeof detail === 'string' ? detail : '')}</div></div>`; }
 function repTab(el, r, verification) {
@@ -755,7 +760,7 @@ async function passport(c, name, tab = 'passport') {
   if (tab === 'posts') return loadFeed(el, `/users/${u.username}/posts`, 'No Network Posts yet.');
   const hidden = u.hidden_sections.length ? `<p class="tiny muted">@${esc(u.username)} keeps some Passport sections private.</p>` : '';
   el.innerHTML = `<div class="card"><h3 style="margin-top:0">Verification</h3><div class="small">${verifLine(u.verification)}</div><p class="tiny muted">Each verification type is separate. ${esc(t.label)}.</p>
-    ${u.is_me ? `<div class="row wrap"><button class="btn sm" data-vk="wallet">Request wallet verification</button><button class="btn sm" data-vk="identity">Request identity verification</button></div><p class="tiny muted">No external provider is connected in this beta, so requests stay pending. NETWORK never asks for seed phrases or private keys.</p>` : ''}</div>
+    ${u.is_me ? `<div class="row wrap"><button class="btn sm" id="wsign">${u.verification.wallet.verified ? 'Re-verify wallet (sign message)' : 'Verify wallet ownership (sign message)'}</button></div><p class="tiny muted">Uses your wallet's "Sign message" only: no transaction, no fees, and NETWORK never asks for seed phrases or private keys. Wallet ownership verified proves control of the wallet only, not trustworthiness or trading performance. Identity needs a KYC provider, which isn't connected yet.</p>` : S.me ? `<button class="btn ghost sm" data-report="user" data-target="${esc(u.username)}">Report @${esc(u.username)}</button>` : ''}</div>
     <div class="card"><h3 style="margin-top:0">Reputation indicators</h3><div class="indic">${indicCard('Engagement quality', ind.engagement_quality.value, ind.engagement_quality.detail)}${indicCard('Collaboration history', ind.collaboration_history.value, ind.collaboration_history.detail)}
       ${indicCard('Fulfilled commitments', ind.fulfilled_commitments.value, ind.fulfilled_commitments.detail)}${indicCard('Reliability', ind.reliability.value, ind.reliability.detail, pct)}${indicCard('Community contributions', ind.community_contributions.value, ind.community_contributions.detail)}
       ${indicCard('Tracked calls (DexScreener price at post time)', t.verified ? `${t.tracked_calls} · ${pct(t.win_rate)} hit 1.5×` : null, t.verified ? `Avg peak ${mx(t.avg_peak)} · ${t.rugs} rugs flagged` : 'No independently tracked calls yet')}</div><p class="tiny muted">Reputation is earned from on-platform records only. Follower counts don't add reputation, and it can't be bought.</p></div>
@@ -766,7 +771,7 @@ async function passport(c, name, tab = 'passport') {
       ${u.endorsements.map(e => `<div class="li small">${avatar(e.from, 'sm')}<div class="grow"><a href="#/u/${esc(e.from.username)}">@${esc(e.from.username)}</a> endorsed for <b>${esc(e.category)}</b>${e.note ? `: “${esc(e.note)}”` : ''}<div class="tiny muted">${ago(e.created_at)}</div></div></div>`).join('')}</div>` : ''}
     ${u.collaborations.length ? `<div class="card"><h3 style="margin-top:0">Collaboration history</h3>${u.collaborations.map(x => `<a class="li small" href="#/opportunities/${x.opportunity_id}"><span class="grow"><b>${esc(x.title)}</b> with @${esc(x.with.username)} · ${esc(x.category)}</span><span class="pill ${x.status === 'completed' ? 'g' : 'a'}">${esc(x.status)}</span></a>`).join('')}</div>` : ''}
     ${u.calls.length ? `<div class="card"><h3 style="margin-top:0">Token calls</h3>${u.calls.slice(0, 5).map(callCard).join('')}</div>` : ''}`;
-  el.querySelectorAll('[data-vk]').forEach(b => b.onclick = async () => { try { const r2 = await api('/verifications', { body: { kind: b.dataset.vk } }); toast('Request recorded: ' + r2.detail); route(); } catch (e) { fail(e); } });
+  $('#wsign')?.addEventListener('click', () => verifyWalletFlow());
 }
 on(/^\/passport\/(\w+)$/, (c, n) => passport(c, n, 'passport'), { k: 'me' });
 on(/^\/u\/(\w+)$/, (c, n) => passport(c, n, 'posts'), { k: 'me' });
@@ -824,7 +829,7 @@ on(/^\/rankings(?:\/(\w+))?$/, async (c, cat = 'top') => {
     ? cur.rows.map(n => `<tr><td class="num">${n.rank}</td><td><a class="row" href="#/n/${esc(n.slug)}">${netAv(n, 'sm')}<span><b>${esc(n.name)}</b>${demo(n)}<div class="tiny muted">${esc(n.type)} · ${n.members} members</div></span></a></td><td class="score">${cur.key === 'growing' ? pct(n.growth) : cur.key === 'active' ? n.activity : n.score.toFixed(1)}</td>
       <td class="hide-sm">${Object.entries(n.score_parts).map(([k, v]) => `<div class="factor"><span class="tiny">${esc(k.replace(/_/g, ' '))}</span><span class="tiny muted">${v.toFixed(1)}</span></div>`).join('')}</td></tr>`).join('')
     : cur.rows.map(u => `<tr><td class="num">${u.rank}</td><td><a class="row" href="#/passport/${esc(u.username)}">${avatar(u, 'sm')}<span><b>${esc(u.display_name)}</b>${demo(u)}<div class="tiny muted">@${esc(u.username)} · Lv ${u.level}</div></span></a></td><td class="score">${cur.key === 'callers' ? pct(u.trading.win_rate) : cur.key === 'endorsed' ? u.endorsements_weighted.toFixed(1) : u[{ collaborators: 'collaborations', contributors: 'contributions', research: 'research' }[cur.key]]}</td><td class="hide-sm tiny muted">${cur.key === 'callers' ? `${u.trading.tracked_calls} tracked calls · avg peak ${mx(u.trading.avg_peak)} · ${u.trading.rugs} rugs` : cur.key === 'endorsed' ? `${u.endorsements} endorsements (weighted by endorser reputation)` : ''}</td></tr>`).join('');
-  c.innerHTML = `<h2>Network Rankings</h2><div class="chips">${r.categories.map(x => `<a class="chip ${x.key === cur.key ? 'on' : ''}" href="#/rankings/${x.key}">${esc(x.title)}</a>`).join('')}</div>
+  c.innerHTML = `<div class="row between wrap"><h2>Network Rankings</h2><span class="tiny muted" title="Rankings are recomputed from stored records every ${Math.round(r.ttl_seconds / 60)} min">Updated ${updatedAgo(r.computed_at)}</span></div><div class="chips">${r.categories.map(x => `<a class="chip ${x.key === cur.key ? 'on' : ''}" href="#/rankings/${x.key}">${esc(x.title)}</a>`).join('')}</div>
    <div class="card" style="margin-top:12px"><h3 style="margin-top:0">${esc(cur.title)}</h3><p class="small muted">Metric: <b>${esc(cur.metric)}</b>. ${esc(cur.how)}</p>
    <table class="table"><thead><tr><th>#</th><th>${cur.kind === 'network' ? 'Network' : 'Member'}</th><th>${esc(cur.metric.split(' (')[0])}</th><th class="hide-sm">Breakdown</th></tr></thead><tbody>${rows || '<tr><td colspan="4" class="muted">Nobody qualifies yet. Rankings fill from real activity.</td></tr>'}</tbody></table></div>
    <div class="card"><h3 style="margin-top:0">How the Network score works</h3>${r.method.map(m => `<div class="factor"><span><b>${esc(m.factor)}</b> <span class="muted">${esc(m.how)}</span></span><span class="green">${m.weight}%</span></div>`).join('')}
@@ -856,7 +861,7 @@ on(/^\/intelligence$/, async c => {
    ${box('Upcoming events', d.upcoming_events.map(e => `<a class="li small" href="#/n/${esc(e.network.slug)}/events"><b class="grow">${esc(e.title)}</b><span class="muted">${new Date(e.starts_at).toLocaleDateString()} · ${esc(e.network.name)}</span></a>`).join('') || '<p class="muted small">No events.</p>')}
    </div><h3>Recent announcements</h3>${feedHTML(d.recent_announcements, 'No announcements from your Networks or shared by connected Networks.')}`;
 }, { k: 'discover', auth: true });
-on(/^\/rewards$/, c => { c.innerHTML = `<div class="card"><h2 style="margin-top:0">Rewards: coming soon</h2><p class="muted">Rewards are not live. When they launch they will be tied to earned contribution, never to buying reputation or rankings. Nothing is being distributed today.</p></div>`; });
+on(/^\/rewards$/, () => { location.hash = '#/achievements'; });
 on(/^\/about$/, c => { c.innerHTML = `<div class="card"><h2 style="margin-top:0">About NETWORK</h2><p>NETWORK isn't just where you find the next opportunity. It's where you build the connections that create opportunities.</p><img src="/static/img/mockup.png" alt="Design mockup" style="max-width:100%;border-radius:12px"><p class="small muted">Token data from DexScreener's free public API. Not financial advice. Items marked DEMO are seeded sample content.</p></div>`; });
 
 // ---------------------------------------------------------------- boot
@@ -864,4 +869,4 @@ async function boot() {
   try { [S.me, S.meta] = await Promise.all([api('/me'), api('/meta')]); } catch (e) { S.meta = S.meta || { network_types: [], opportunity_categories: [], endorse_categories: [], project_stages: [], roles: [] }; }
   shell(); connectWS(); route();
 }
-boot();
+window.addEventListener('DOMContentLoaded', boot);

@@ -26,3 +26,16 @@ No posts, replies, likes, reposts, follows, global/following feeds or trending h
 | | 1-line CSS / 135-line JS → new dashboard UI matching the official mockup, with mobile bottom nav |
 
 The old `network.db` was not migrated (demo data only) and is excluded from the new repo.
+
+## Status at v0.1.0-beta (2026-11-02)
+| Area | Status |
+|---|---|
+| Postgres, migrations, DB media storage, DB rate limiter | Done; full suite passes on SQLite and PostgreSQL 17 |
+| Moderation (posts/users/Networks, two queues, suspensions, audit, notifications, new-account limits) | Done |
+| Wallet / domain / dev-wallet / metadata verification | Done (signMessage only) |
+| CTO claims | Done, with limits below |
+| Identity verification | **Partial by design:** stays "needs KYC provider" (no provider) |
+| Earliest-transaction creator lookup | **Partial:** pages back at most `CHAIN_MAX_SIG_PAGES`×1000 signatures; busy mints return "incomplete" and the pump.fun / Metaplex methods are relied on |
+| Dev abandonment evidence | **Partial:** shows "holds none now"; cannot prove *sold* vs transferred |
+| Suspensions | Platform admins only; Network moderators can hide/remove but not suspend |
+| Realtime | Single instance only (in-process hub); scaling out needs Redis pub/sub |

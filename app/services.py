@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from statistics import median
 from sqlalchemy import select, func, or_, and_, not_, exists
 from sqlalchemy.orm import Session
-from .models import (User, Network, Membership, Connection, Post, Like, Follow, Block, Notification, Endorsement,
+from .models import (NetworkActivity, ACTIVITY_TYPES, User, Network, Membership, Connection, Post, Like, Follow, Block, Notification, Endorsement,
                      Opportunity, Application, Call, ChatMessage, Report, Conversation, Verification, Achievement,
                      AuditLog, ReputationRecord, Event, SHARE_KEYS, ADMIN_PERMS)
 from .realtime import hub
@@ -20,7 +20,7 @@ def aware(dt):
 
 
 def iso(dt):
-    return aware(dt).isoformat() if dt else None
+    return aware(dt).astimezone(timezone.utc).isoformat() if dt else None  # always UTC (Postgres returns session-tz values)
 
 
 # ---------------------------------------------------------------- notifications
@@ -110,6 +110,7 @@ def visible_filter(db, uid):
     public_nets = select(Network.id).where(Network.is_private.is_(False))
     conds = [Post.network_id.is_(None), Post.network_id.in_(public_nets)] + shared_conditions(my_nets, g)
     f = and_(Post.removed.is_(False), or_(*conds))
+    f = and_(f, or_(Post.hidden.is_(False), Post.author_id == (uid or 0)))  # moderator-hidden posts stay visible to their author only
     if uid:
         blocked = select(Block.blocked_id).where(Block.blocker_id == uid)
         blockers = select(Block.blocker_id).where(Block.blocked_id == uid)
@@ -321,18 +322,22 @@ def conversation_for(db, a: int, b: int, create=True):
 
 # ---------------------------------------------------------------- verification (separate kinds, pluggable providers)
 VERIFY_LABELS = {
-    "wallet": ("Wallet ownership", "Proves control of a Solana wallet via an external signature. No provider connected in this beta."),
-    "identity": ("Identity", "Confirms the person behind the account. No provider connected in this beta."),
-    "project": ("Project", "Confirms a project's team/contract. Requires a manual or external review; none connected in this beta."),
+    "wallet": ("Wallet ownership", "Proves control of a Solana wallet: you signed a one-time message with it (signMessage only, never a transaction). "
+               "It says nothing about trustworthiness or trading performance."),
+    "identity": ("Identity", "Needs a KYC provider. None is connected in this beta, so identity can't be verified yet."),
+    "project": ("Project domain", "Proves the team controls the project's website domain (DNS TXT record or /.well-known/network-verify.txt)."),
+    "devwallet": ("Dev wallet", "Proves the Network signed with the wallet that created the token on-chain. It proves control of the creator wallet only, not that the project is safe."),
+    "metadata": ("Metadata authority", "Proves the team signed with the token's Metaplex update-authority wallet. Control only, not safety."),
     "trading": ("Tracked calls", "Only calls independently tracked by NETWORK's DexScreener job count. Self-reported results never count."),
 }
 
 
 def verification_status(db, subject_type: str, subject_id: int, trading: dict | None = None):
-    rows = {v.kind: v for v in db.scalars(select(Verification).where(Verification.subject_type == subject_type, Verification.subject_id == subject_id)
-                                           .order_by(Verification.id))}
+    rows = {}
+    for v in db.scalars(select(Verification).where(Verification.subject_type == subject_type, Verification.subject_id == subject_id).order_by(Verification.id)):
+        if v.kind not in rows or v.status == "verified" or rows[v.kind].status != "verified": rows[v.kind] = v
     out = {}
-    kinds = ["wallet", "identity", "trading"] if subject_type == "user" else ["project", "trading"]
+    kinds = ["wallet", "identity", "trading"] if subject_type == "user" else ["project", "devwallet", "metadata", "identity", "trading"]
     for k in kinds:
         label, how = VERIFY_LABELS[k]
         if k == "trading":
@@ -340,17 +345,33 @@ def verification_status(db, subject_type: str, subject_id: int, trading: dict | 
             out[k] = {"label": label, "verified": ok, "status": "tracked" if ok else "no tracked calls",
                       "provider": "NETWORK DexScreener tracker" if ok else "", "how": how,
                       "detail": trading.get("label", "") if trading else ""}
+        elif k == "identity":
+            out[k] = {"label": label, "verified": False, "status": "needs KYC provider", "provider": "", "how": how,
+                      "detail": "Identity verification: pending, needs a KYC provider (not connected)."}
         else:
             r = rows.get(k)
             out[k] = {"label": label, "verified": bool(r and r.status == "verified"), "status": r.status if r else "unverified",
-                      "provider": r.provider if r else "", "how": how, "detail": r.detail if r else ""}
+                      "provider": r.provider if r else "", "how": how, "detail": r.detail if r else "", "method": r.method if r else "",
+                      "value": r.value if r else "", "checked_at": iso(r.decided_at) if r and r.decided_at else None}
     return out
+
+
+def record_activity(db, network_id, type_, text, link=""):
+    """Structured activity a Network can selectively share with connected Networks (see connections activity picker)."""
+    db.add(NetworkActivity(network_id=network_id, type=type_, text=text[:300], link=link[:200]))
+
+
+def activity_types_of(conn, side_network_id) -> set:
+    p = "req_" if conn.requester_id == side_network_id else "tgt_"
+    return {t for t in (getattr(conn, p + "activity_types") or "").split(",") if t in ACTIVITY_TYPES}
 
 
 # ---------------------------------------------------------------- achievements (earned by rules, persisted)
 def award(db, subject_type, subject_id, code, name, desc):
     if not db.scalar(select(Achievement.id).where(Achievement.subject_type == subject_type, Achievement.subject_id == subject_id, Achievement.code == code)):
         db.add(Achievement(subject_type=subject_type, subject_id=subject_id, code=code, name=name, description=desc))
+        if subject_type == "network":
+            record_activity(db, subject_id, "achievements", f"Earned the achievement: {name}")
 
 
 def award_user_achievements(db, u, rep, founded_n, joined_n, conns_n):

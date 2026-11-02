@@ -23,13 +23,13 @@ def _start(env, port):
 
 def test_persists_after_restart():
     d = tempfile.mkdtemp()
-    env = {**os.environ, "DATABASE_URL": f"sqlite:///{d}/p.db", "DISABLE_TRACKER": "1", "UPLOAD_DIR": f"{d}/up"}
+    env = {**os.environ, "DATABASE_URL": os.environ["DATABASE_URL"] if os.getenv("TEST_DATABASE_URL") else f"sqlite:///{d}/p.db", "DISABLE_TRACKER": "1", "UPLOAD_DIR": f"{d}/up"}
     subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"], cwd=ROOT, env=env, check=True)
     port = _port(); H = {"x-csrf": "1"}
     p = _start(env, port)
     try:
         c = httpx.Client(base_url=f"http://127.0.0.1:{port}", headers=H)
-        assert c.post("/api/auth/register", json={"username": "persist1", "email": "p@ex.com", "password": "password123"}).status_code == 200
+        assert c.post("/api/auth/register", json={"username": f"persist{os.getpid() % 100000}", "email": f"p{os.getpid()}@ex.com", "password": "password123"}).status_code == 200
         assert c.post("/api/networks", json={"name": "Persistent Net", "type": "Personal"}).status_code == 200
         assert c.post("/api/posts", json={"body": "survives restarts"}).status_code == 200
     finally:
@@ -37,8 +37,8 @@ def test_persists_after_restart():
     p = _start(env, port)
     try:
         c = httpx.Client(base_url=f"http://127.0.0.1:{port}", headers=H)
-        assert c.post("/api/auth/login", json={"login": "persist1", "password": "password123"}).status_code == 200
-        assert "survives restarts" in c.get("/api/users/persist1/posts").text
+        assert c.post("/api/auth/login", json={"login": f"persist{os.getpid() % 100000}", "password": "password123"}).status_code == 200
+        assert "survives restarts" in c.get(f"/api/users/persist{os.getpid() % 100000}/posts").text
         assert any(n["name"] == "Persistent Net" for n in c.get("/api/networks?mine=1").json())
     finally:
         p.terminate(); p.wait()

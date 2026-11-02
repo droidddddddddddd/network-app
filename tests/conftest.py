@@ -5,8 +5,15 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 TMP = tempfile.mkdtemp()
 DB = os.path.join(TMP, "test.db")
-os.environ["DATABASE_URL"] = f"sqlite:///{DB}"
+PG = os.getenv("TEST_DATABASE_URL", "")  # e.g. postgresql://net@127.0.0.1:55432/network_test
+if PG:
+    import psycopg
+    with psycopg.connect(PG, autocommit=True) as _c:
+        _c.execute("DROP SCHEMA public CASCADE"); _c.execute("CREATE SCHEMA public")
+os.environ["DATABASE_URL"] = PG or f"sqlite:///{DB}"
 os.environ["DISABLE_TRACKER"] = "1"
+os.environ["RANKINGS_TTL"] = "0"
+os.environ["ADMIN_USERNAMES"] = "padmin"
 os.environ["UPLOAD_DIR"] = os.path.join(TMP, "uploads")
 # migration check: the schema used by every test is built by Alembic, not create_all
 subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"], cwd=ROOT, check=True, env=os.environ.copy())
@@ -19,7 +26,7 @@ from app import security  # noqa: E402
 
 @pytest.fixture(autouse=True)
 def _reset_limits():
-    security._hits.clear()
+    security.reset_rate_limits()
     yield
 
 
@@ -51,7 +58,7 @@ def mk():
         c = C(name)
         u = c.ok("POST", "/api/auth/register", json={"username": name, "email": f"{name}@ex.com", "password": "password123", "display_name": name.title()})
         c.id = u["id"]
-        security._hits.clear()
+        security.reset_rate_limits()
         return c
     return make
 

@@ -1,9 +1,11 @@
-# Render Blueprint — repo root, no rootDir. Free web service + free Postgres.
+# Render Blueprint (repo root). Free web service + free Postgres. Migrations run on every start.
+# Secrets are never stored here: values marked sync:false are typed into the Render dashboard.
 services:
   - type: web
     name: network-app
     runtime: python
     plan: free
+    numInstances: 1  # realtime chat/notifications hub is in-process; keep a single instance
     buildCommand: pip install -r requirements.txt
     startCommand: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips='*'
     healthCheckPath: /health
@@ -18,7 +20,25 @@ services:
         fromDatabase:
           name: network-db
           property: connectionString
+      - key: STORAGE_BACKEND
+        value: db
+      - key: ADMIN_USERNAMES
+        sync: false
+      - key: HELIUS_API_KEY
+        sync: false
+      - key: SOLANA_RPC_URL
+        sync: false
       - key: CORS_ORIGINS
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ENDPOINT_URL
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: S3_PUBLIC_BASE_URL
         sync: false
 databases:
   - name: network-db

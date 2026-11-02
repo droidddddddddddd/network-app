@@ -59,21 +59,66 @@ def current_user(user: User | None = Depends(optional_user)) -> User:
     return user
 
 
-# ---- in-memory sliding-window rate limiter (single instance; fine for Render free tier) ----
-_hits: dict[str, deque] = defaultdict(deque)
+# ---- DB-backed sliding-window rate limiter: correct across processes and instances ----
+NEW_ACCOUNT_HOURS = 24
+_hits: dict = {}  # kept for backwards compatibility; unused
 
 
-def rate_limit(name: str, limit: int, window: int):
+def reset_rate_limits():
+    from .db import SessionLocal
+    from .models import RateHit
+    with SessionLocal() as db:
+        db.query(RateHit).delete(); db.commit()
+
+
+def rate_limit(name: str, limit: int, window: int, new_limit: int | None = None):
+    """`new_limit` applies instead of `limit` to accounts younger than 24h (stricter limits for new accounts)."""
     def dep(request: Request):
+        from datetime import datetime, timezone
+        from sqlalchemy import select, func, delete
+        from .db import SessionLocal
+        from .models import RateHit
         ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "?").split(",")[0].strip()
-        key = f"{name}:{ip}:{read_token(token_from_request(request)) or ''}"
-        q, t = _hits[key], time.time()
-        while q and q[0] < t - window:
-            q.popleft()
-        if len(q) >= limit:
-            raise HTTPException(429, "Too many requests — slow down and try again shortly.")
-        q.append(t)
+        uid = read_token(token_from_request(request))
+        key = f"{name}:{uid}" if uid else f"{name}:ip:{ip}"
+        t = time.time()
+        with SessionLocal() as db:
+            lim = limit
+            if new_limit is not None and uid:
+                u = db.get(User, uid)
+                if u:
+                    ca = u.created_at if u.created_at.tzinfo else u.created_at.replace(tzinfo=timezone.utc)
+                    if (datetime.now(timezone.utc) - ca).total_seconds() < NEW_ACCOUNT_HOURS * 3600: lim = new_limit
+            n = db.scalar(select(func.count(RateHit.id)).where(RateHit.key == key, RateHit.ts > t - window)) or 0
+            if n >= lim:
+                raise HTTPException(429, "Too many requests. Slow down and try again shortly."
+                                    + (" New accounts have lower limits for their first 24 hours." if lim != limit else ""))
+            db.add(RateHit(key=key, ts=t))
+            if int(t) % 50 == 0: db.execute(delete(RateHit).where(RateHit.ts < t - 86400))
+            db.commit()
     return Depends(dep)
+
+
+ADMIN_USERNAMES = {x.strip().lower() for x in os.getenv("ADMIN_USERNAMES", "").split(",") if x.strip()}
+
+
+def is_platform_admin(u) -> bool:
+    """Platform admins are configured only via the ADMIN_USERNAMES env var, never through the UI."""
+    return bool(u) and u.username.lower() in {x.strip().lower() for x in os.getenv("ADMIN_USERNAMES", "").split(",") if x.strip()}
+
+
+def suspended(u) -> bool:
+    from datetime import datetime, timezone
+    if not u or not u.suspended_until: return False
+    su = u.suspended_until if u.suspended_until.tzinfo else u.suspended_until.replace(tzinfo=timezone.utc)
+    return su > datetime.now(timezone.utc)
+
+
+def ensure_active(u):
+    if suspended(u):
+        until = u.suspended_until
+        indefinite = until.year >= 9000
+        raise HTTPException(403, "Your account is suspended" + ("" if indefinite else f" until {until:%Y-%m-%d %H:%M} UTC") + ". You can't post, message or endorse.")
 
 
 # ---- input cleaning: strip tags/control chars; output is always escaped client-side too ----
@@ -90,7 +135,7 @@ def clean_url(s) -> str:
     s = clean(s, 500)
     if not s:
         return ""
-    if s.startswith("/uploads/") or re.match(r"^https?://[^\s<>\"']+$", s):
+    if s.startswith("/uploads/") or s.startswith("/media/") or re.match(r"^https?://[^\s<>\"']+$", s):
         return s
     raise HTTPException(400, "Image/link must be an http(s) URL or an uploaded file.")
 

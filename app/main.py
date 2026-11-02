@@ -13,16 +13,16 @@ from sqlalchemy.orm import Session
 from .db import get_db, SessionLocal, IS_SQLITE
 from .models import (User, Follow, Block, Network, Membership, Connection, Post, Like, Report, Endorsement, Opportunity,
                      Application, Message, Notification, Call, ChatMessage, Conversation, Event, Invite, Verification, Achievement,
-                     AuditLog, NETWORK_TYPES, ENDORSE_CATS, OPP_CATS, PROJECT_STAGES, SHARE_KEYS, ADMIN_PERMS, PRIVACY_KEYS, USER_ROLES)
+                     AuditLog, Nonce, Media, RankingSnapshot, NetworkActivity, CtoClaim, CtoBacking, ACTIVITY_TYPES, NETWORK_TYPES, ENDORSE_CATS, OPP_CATS, PROJECT_STAGES, SHARE_KEYS, ADMIN_PERMS, PRIVACY_KEYS, USER_ROLES)
 import secrets
 from fastapi.middleware.cors import CORSMiddleware
 from .schemas import *  # noqa: F403
 from .security import (hash_pw, check_pw, set_session, COOKIE, optional_user, current_user, rate_limit, clean, clean_url,
-                       extract_tags, extract_mentions, read_token, PROD)
+                       extract_tags, extract_mentions, read_token, PROD, is_platform_admin, ensure_active, suspended)
 from .services import *  # noqa: F403
 from .services import RANKING_METHOD
 from .realtime import hub
-from . import dex
+from . import dex, storage
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
@@ -34,8 +34,22 @@ UPLOADS.mkdir(parents=True, exist_ok=True)
 async def lifespan(app):
     hub.loop = asyncio.get_running_loop()
     task = asyncio.create_task(dex.tracker_loop()) if os.getenv("DISABLE_TRACKER") != "1" else None
+    cto_task = asyncio.create_task(cto_loop()) if os.getenv("DISABLE_TRACKER") != "1" else None
     yield
-    if task: task.cancel()
+    for t in (task, cto_task):
+        if t: t.cancel()
+
+
+async def cto_loop():
+    every = int(os.getenv("CTO_RECHECK_SECONDS", "3600"))
+    await asyncio.sleep(30)
+    while True:
+        try:
+            from .trust import recheck_all
+            await asyncio.to_thread(recheck_all)
+        except Exception as e:
+            print("[cto] error:", e)
+        await asyncio.sleep(every)
 
 
 app = FastAPI(title="NETWORK", version="1.0.0", lifespan=lifespan, docs_url=None if PROD else "/api/docs", redoc_url=None)
@@ -107,7 +121,10 @@ def me_out(db, u: User):
             "wallet_address": u.wallet_address, "wallet_verified": u.wallet_verified,
             "privacy": {k: getattr(u, k) for k in PRIVACY_KEYS}, "unread_notifications": unread, "unread_messages": unread_dm,
             "level": rep["level"], "xp": rep["xp"], "level_progress": rep["level_progress"],
-            "role": u.role or "", "interests": [x for x in (u.interests or "").split(",") if x]}
+            "role": u.role or "", "interests": [x for x in (u.interests or "").split(",") if x],
+            "is_platform_admin": is_platform_admin(u), "suspended": suspended(u),
+            "suspended_until": iso(u.suspended_until) if suspended(u) else None, "suspend_reason": u.suspend_reason if suspended(u) else "",
+            "new_account": (utcnow() - aware(u.created_at)).total_seconds() < 86400}
 
 
 # ================================================================= AUTH
@@ -165,16 +182,21 @@ def update_me(data: ProfileIn, user: User = Depends(current_user), db: Session =
 
 # ================================================================= UPLOADS
 @app.post("/api/upload", dependencies=[rate_limit("upload", 20, 600)])
-async def upload(file: UploadFile = File(...), user: User = Depends(current_user)):
-    ext = {"image/png": ".png", "image/jpeg": ".jpg", "image/gif": ".gif", "image/webp": ".webp"}.get(file.content_type)
-    if not ext: raise HTTPException(400, "Only PNG, JPG, GIF or WEBP images.")
-    data = await file.read(3 * 1024 * 1024 + 1)
-    if len(data) > 3 * 1024 * 1024: raise HTTPException(400, "Image too large (max 3 MB).")
-    sig = {".png": b"\x89PNG", ".jpg": b"\xff\xd8", ".gif": b"GIF8", ".webp": b"RIFF"}[ext]
-    if not data.startswith(sig): raise HTTPException(400, "File content doesn't match an image.")
-    name = f"{uuid.uuid4().hex}{ext}"
-    (UPLOADS / name).write_bytes(data)
-    return {"url": f"/uploads/{name}"}
+async def upload(file: UploadFile = File(...), user: User = Depends(current_user), db: Session = Depends(get_db)):
+    data = await file.read(storage.MAX_BYTES + 1)
+    try:
+        url = storage.save(db, data, file.content_type, user.id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"url": url, "backend": storage.backend()}
+
+
+@app.get("/media/{key}")
+def media(key: str, db: Session = Depends(get_db)):
+    m = db.scalar(select(Media).where(Media.key == key[:80]))
+    if not m: raise HTTPException(404, "Not found.")
+    return Response(m.data, media_type=m.content_type, headers={"Cache-Control": "public, max-age=31536000, immutable",
+                                                                 "X-Content-Type-Options": "nosniff", "Content-Length": str(m.size)})
 
 
 # ================================================================= USERS / PASSPORT
@@ -279,8 +301,9 @@ def block(username: str, user: User = Depends(current_user), db: Session = Depen
     return {"blocked": True}
 
 
-@app.post("/api/users/{username}/endorse", dependencies=[rate_limit("endorse", 10, 3600)])
+@app.post("/api/users/{username}/endorse", dependencies=[rate_limit("endorse", 10, 3600, new_limit=3)])
 def endorse(username: str, data: EndorseIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    ensure_active(user)
     u = get_user_by_name(db, username)
     if u.id == user.id: raise HTTPException(400, "You can't endorse yourself.")
     if db.scalar(select(Endorsement.id).where(Endorsement.from_id == user.id, Endorsement.to_id == u.id, Endorsement.category == data.category)):
@@ -326,8 +349,9 @@ def feed(tab: str = "network", before: int | None = None, viewer: User | None = 
     return posts_out(db, list(db.scalars(stmt.order_by(desc(Post.id)).limit(30))), vid)
 
 
-@app.post("/api/posts", dependencies=[rate_limit("post", 20, 60)])
+@app.post("/api/posts", dependencies=[rate_limit("post", 20, 60, new_limit=5), rate_limit("post_day", 300, 86400, new_limit=30)])
 def create_post(data: PostIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    ensure_active(user)
     body = clean(data.body, 2000)
     img = clean_url(data.image_url)
     if not body and not img: raise HTTPException(400, "Write something or add an image.")
@@ -394,6 +418,7 @@ def like(pid: int, user: User = Depends(current_user), db: Session = Depends(get
 
 @app.post("/api/posts/{pid}/renetwork", dependencies=[rate_limit("post", 20, 60)])
 def renetwork(pid: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    ensure_active(user)
     p = db.get(Post, pid)
     if not p or not can_see_post(db, user.id, p): raise HTTPException(404, "Post not found.")
     if p.renetwork_of: p = db.get(Post, p.renetwork_of)
@@ -410,17 +435,8 @@ def renetwork(pid: int, user: User = Depends(current_user), db: Session = Depend
 
 @app.post("/api/posts/{pid}/report", dependencies=[rate_limit("report", 10, 600)])
 def report(pid: int, data: ReportIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    p = db.get(Post, pid)
-    if not p or not can_see_post(db, user.id, p): raise HTTPException(404, "Post not found.")
-    if db.scalar(select(Report.id).where(Report.reporter_id == user.id, Report.post_id == pid)):
-        raise HTTPException(409, "You already reported this post.")
-    db.add(Report(reporter_id=user.id, post_id=pid, reason=clean(data.reason, 300)))
-    if p.network_id:
-        n = db.get(Network, p.network_id)
-        for uid in db.scalars(select(Membership.user_id).where(Membership.network_id == n.id, Membership.status == "active", Membership.role.in_(["founder", "admin"]))):
-            notify(db, uid, None, "report", f"A post in {n.name} was reported: {clean(data.reason, 80)}", f"#/post/{pid}")
-    commit(db)
-    return {"ok": True}
+    from .trust import file_report
+    return file_report(db, user, "post", str(pid), data.reason)
 
 
 @app.delete("/api/posts/{pid}")
@@ -476,12 +492,17 @@ def network_detail(db, n: Network, vid: int):
             continue
         conns.append({"id": c.id, "status": c.status, "network": network_brief(other), "incoming": c.target_id == n.id,
                       "message": c.message if is_admin(m) else "", "created_at": iso(c.created_at),
-                      "we_share": granted_by(c, n.id) if is_admin(m) else None,
-                      "they_share": granted_by(c, other.id) if member else None})
+                      "we_share": {**granted_by(c, n.id), "activity_types": sorted(activity_types_of(c, n.id))} if is_admin(m) else None,
+                      "they_share": {**granted_by(c, other.id), "activity_types": sorted(activity_types_of(c, other.id))} if member else None})
     founder = db.get(User, n.founder_id)
     pending = db.scalar(select(func.count(Membership.id)).where(Membership.network_id == n.id, Membership.status == "pending")) if can(m, "perm_members") else 0
     can_view = (not n.is_private) or member
     rep = network_reputation(db, n)
+    approved = sum(1 for c in conns if c["status"] == "approved")
+    if rep["members"] >= 10: award(db, "network", n.id, "ten_members", "10 Members", "Reached 10 active members")
+    if approved: award(db, "network", n.id, "connected", "Connected", "Has an approved connection with another Network")
+    if rep["eligible"]: award(db, "network", n.id, "ranked", "Ranked", "Eligible for public rankings (3+ active members)")
+    if db.new: commit(db)
     return {**network_brief(n, member_count(db, n.id)), "founder": user_brief(founder), "created_at": iso(n.created_at),
             "my_role": m.role if member else None, "my_status": m.status if m else None, "can_view": can_view,
             "stage": n.stage, "launch_at": iso(n.launch_at), "team_info": n.team_info if can_view else "",
@@ -544,6 +565,10 @@ def update_net(slug: str, data: NetworkUpdate, request: Request, user: User = De
         if k in ("avatar_url", "cover_url"): v = clean_url(v)
         elif k == "launch_at": v = aware(v)
         elif isinstance(v, str): v = clean(v, 3000)
+        if k == "stage" and v != n.stage and v in ("Launch", "Growth"):
+            record_activity(db, n.id, "launches", f"{n.name} moved to stage: {v}", f"#/n/{n.slug}/launch")
+        if k == "launch_at" and v and (not n.launch_at or aware(n.launch_at) != v):
+            record_activity(db, n.id, "launches", f"{n.name} set a launch date: {v:%Y-%m-%d %H:%M} UTC", f"#/n/{n.slug}/launch")
         setattr(n, k, v)
     commit(db)
     return network_detail(db, n, user.id)
@@ -563,6 +588,7 @@ def join(slug: str, invite: str = "", user: User = Depends(current_user), db: Se
         m.status, m.role, m.requested_at, m.joined_at, m.left_at = status, "member", utcnow(), (utcnow() if status == "active" else None), None
     else:
         db.add(Membership(network_id=n.id, user_id=user.id, status=status, joined_at=utcnow() if status == "active" else None))
+    if status == "active": record_activity(db, n.id, "new_members", f"@{user.username} joined {n.name}", f"#/u/{user.username}")
     for uid in db.scalars(select(Membership.user_id).where(Membership.network_id == n.id, Membership.status == "active", Membership.role.in_(["founder", "admin"]))):
         notify(db, uid, user.id, "join_request" if status == "pending" else "join",
                f"@{user.username} {'requested to join' if status == 'pending' else 'joined'} {n.name}", f"#/n/{n.slug}/members")
@@ -608,7 +634,10 @@ def member_action(slug: str, uid: int, data: MemberAction, request: Request, use
     if a in ("approve", "reject"):
         if t.status != "pending": raise HTTPException(400, "No pending request.")
         t.status = "active" if a == "approve" else "rejected"
-        if a == "approve": t.joined_at = utcnow()
+        if a == "approve":
+            t.joined_at = utcnow()
+            nu = db.get(User, uid)
+            record_activity(db, n.id, "new_members", f"@{nu.username} joined {n.name}", f"#/u/{nu.username}")
         notify(db, uid, user.id, "join_decision", f"Your request to join {n.name} was {'approved ✅' if a == 'approve' else 'declined'}", f"#/n/{n.slug}")
     elif a in ("make_admin", "make_member"):
         if me_m.role != "founder": raise HTTPException(403, "Only the founder can change roles.")
@@ -662,8 +691,9 @@ def chat_history(slug: str, user: User = Depends(current_user), db: Session = De
     return [{"id": c.id, "body": c.body, "created_at": iso(c.created_at), "user": user_brief(u)} for c, u in reversed(rows)]
 
 
-@app.post("/api/networks/{slug}/chat", dependencies=[rate_limit("chat", 30, 60)])
+@app.post("/api/networks/{slug}/chat", dependencies=[rate_limit("chat", 30, 60, new_limit=10)])
 def chat_send(slug: str, data: MessageIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    ensure_active(user)
     n = get_network(db, slug)
     if not is_active(membership(db, n.id, user.id)): raise HTTPException(403, "Members only.")
     body = clean(data.body, 1000)
@@ -676,7 +706,7 @@ def chat_send(slug: str, data: MessageIn, user: User = Depends(current_user), db
 
 
 # ================================================================= CONNECTIONS
-@app.post("/api/networks/{slug}/connections", dependencies=[rate_limit("connect", 10, 3600)])
+@app.post("/api/networks/{slug}/connections", dependencies=[rate_limit("connect", 10, 3600, new_limit=2)])
 def request_connection(slug: str, data: ConnectionIn, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
     n = get_network(db, slug)
     if not can(membership(db, n.id, user.id), "perm_connections"): raise HTTPException(403, "Only the founder and admins with connection permission can request connections.")
@@ -689,13 +719,21 @@ def request_connection(slug: str, data: ConnectionIn, request: Request, user: Us
     if ex: db.delete(ex); db.flush()
     p = data.permissions
     c = Connection(requester_id=n.id, target_id=t.id, requested_by=user.id, message=clean(data.message, 500),
-                   **{"req_" + k: v for k, v in p.model_dump().items()})
+                   **perm_cols("req_", p))
     db.add(c)
     audit(db, user.id, n.id, "connection.request", t.slug, "", ip_of(request))
     for mm in db.scalars(select(Membership).where(Membership.network_id == t.id, Membership.status == "active", Membership.role.in_(["founder", "admin"]))):
         if can(mm, "perm_connections"): notify(db, mm.user_id, user.id, "connection_request", f"{n.name} wants to connect with {t.name}", f"#/n/{t.slug}/connections")
     commit(db)
     return {"id": c.id, "status": c.status}
+
+
+def perm_cols(prefix, p) -> dict:
+    d = p.model_dump()
+    types = [t for t in d.pop("activity_types", []) if t in ACTIVITY_TYPES]
+    out = {prefix + k: v for k, v in d.items()}
+    out[prefix + "activity_types"] = ",".join(dict.fromkeys(types))
+    return out
 
 
 def conn_side_admin(db, c: Connection, uid):
@@ -715,7 +753,7 @@ def decide_connection(cid: int, data: ConnectionDecision, request: Request, user
     c.decided_at = utcnow()
     if c.status == "approved":
         p = data.permissions
-        for k, v in data.permissions.model_dump().items(): setattr(c, "tgt_" + k, v)
+        for k, v in perm_cols("tgt_", data.permissions).items(): setattr(c, k, v)
     audit(db, user.id, c.target_id, f"connection.{c.status}", f"connection:{c.id}", "", ip_of(request))
     rn, tn = db.get(Network, c.requester_id), db.get(Network, c.target_id)
     for uid in db.scalars(select(Membership.user_id).where(Membership.network_id == rn.id, Membership.status == "active", Membership.role.in_(["founder", "admin"]))):
@@ -731,11 +769,11 @@ def update_perms(cid: int, data: Perms, request: Request, user: User = Depends(c
     side = conn_side_admin(db, c, user.id)
     if not side: raise HTTPException(403, "Only founders/admins of a connected network can change what it shares.")
     pre = "req_" if side == c.requester_id else "tgt_"
-    for k, v in data.model_dump().items():
-        setattr(c, pre + k, v)
+    for k, v in perm_cols(pre, data).items():
+        setattr(c, k, v)
     audit(db, user.id, side, "connection.permissions", f"connection:{c.id}", ",".join(k for k, v in data.model_dump().items() if v), ip_of(request))
     commit(db)
-    return {"ok": True, "we_share": granted_by(c, side)}
+    return {"ok": True, "we_share": {**granted_by(c, side), "activity_types": sorted(activity_types_of(c, side))}}
 
 
 @app.delete("/api/connections/{cid}")
@@ -923,7 +961,11 @@ def decide_application(aid: int, data: AppDecision, user: User = Depends(current
 def opp_status(oid: int, data: OppStatus, user: User = Depends(current_user), db: Session = Depends(get_db)):
     o = db.get(Opportunity, oid)
     if not o or not opp_out(db, o, user.id)["can_manage"]: raise HTTPException(403, "Only the creator or authorized Network admins can change its status.")
-    o.status = data.status; commit(db)
+    was = o.status
+    o.status = data.status
+    if o.network_id and o.status == "filled" and was != "filled":
+        record_activity(db, o.network_id, "opportunities_filled", f"Opportunity filled: {o.title}", f"#/opp/{o.id}")
+    commit(db)
     return {"ok": True, "status": o.status}
 
 
@@ -957,8 +999,9 @@ def thread(username: str, before: int | None = None, user: User = Depends(curren
             "messages": [{"id": m.id, "mine": m.sender_id == user.id, "body": m.body, "created_at": iso(m.created_at)} for m in msgs]}
 
 
-@app.post("/api/messages/{username}", dependencies=[rate_limit("dm", 30, 60)])
+@app.post("/api/messages/{username}", dependencies=[rate_limit("dm", 30, 60, new_limit=10), rate_limit("dm_day", 500, 86400, new_limit=40)])
 def send_dm(username: str, data: MessageIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    ensure_active(user)
     o = get_user_by_name(db, username)
     if o.id == user.id: raise HTTPException(400, "You can't message yourself.")
     if db.scalar(select(Block.id).where(or_(and_(Block.blocker_id == o.id, Block.blocked_id == user.id), and_(Block.blocker_id == user.id, Block.blocked_id == o.id)))):
@@ -1011,6 +1054,7 @@ def mark_read(user: User = Depends(current_user), db: Session = Depends(get_db))
 # ================================================================= CALLS (independently tracked)
 @app.post("/api/calls", dependencies=[rate_limit("call", 10, 3600)])
 def create_call(data: CallIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    ensure_active(user)
     if data.network_id and not is_active(membership(db, data.network_id, user.id)): raise HTTPException(403, "Join the network to post calls in it.")
     try:
         t = dex.fetch_token(data.token_address)
@@ -1058,8 +1102,26 @@ def tokens_trending():
 
 
 # ================================================================= RANKINGS / DASHBOARD / SEARCH
+RANKINGS_TTL = lambda: int(os.getenv("RANKINGS_TTL", "300"))
+
+
 @app.get("/api/rankings")
-def rankings(type: str = "", db: Session = Depends(get_db)):
+def rankings(type: str = "", refresh: bool = False, db: Session = Depends(get_db)):
+    """Served from a stored snapshot refreshed every RANKINGS_TTL seconds (default 5 min), so ranking cost doesn't grow with traffic."""
+    import json
+    key = type if type in NETWORK_TYPES else ""
+    snap = db.scalar(select(RankingSnapshot).where(RankingSnapshot.key == key).order_by(desc(RankingSnapshot.id)).limit(1))
+    if snap and not refresh and (utcnow() - aware(snap.computed_at)).total_seconds() < RANKINGS_TTL():
+        out = json.loads(snap.data)
+    else:
+        out = compute_rankings(key, db)
+        db.query(RankingSnapshot).filter(RankingSnapshot.key == key).delete()
+        snap = RankingSnapshot(key=key, data=json.dumps(out), computed_at=utcnow())
+        db.add(snap); commit(db)
+    return {**out, "computed_at": iso(snap.computed_at), "ttl_seconds": RANKINGS_TTL()}
+
+
+def compute_rankings(type: str, db: Session):
     """Eight ranking categories, all computed from stored records. Nothing can be bought."""
     rows = []
     for n in db.scalars(select(Network).where(Network.is_private.is_(False)).limit(500)):
@@ -1226,7 +1288,9 @@ def create_event(slug: str, data: EventIn, user: User = Depends(current_user), d
     if aware(data.starts_at) < utcnow() - timedelta(hours=1): raise HTTPException(400, "The event must be in the future.")
     e = Event(network_id=n.id, created_by=user.id, title=clean(data.title, 120), description=clean(data.description, 1000),
               starts_at=aware(data.starts_at), link=clean_url(data.link) if data.link else "", is_public=data.is_public)
-    db.add(e); commit(db)
+    db.add(e)
+    if data.is_public: record_activity(db, n.id, "events", f"{n.name} scheduled: {e.title} ({e.starts_at:%Y-%m-%d %H:%M} UTC)", f"#/n/{n.slug}")
+    commit(db)
     return event_out(e, n)
 
 
@@ -1253,18 +1317,15 @@ def delete_event(eid: int, user: User = Depends(current_user), db: Session = Dep
 # ================================================================= VERIFICATION (pluggable; no provider connected)
 @app.post("/api/verifications", dependencies=[rate_limit("verify", 5, 3600)])
 def request_verification(data: VerifyIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    if data.kind == "project":
-        n = get_network(db, data.network_slug)
-        if (membership(db, n.id, user.id) or Membership()).role != "founder": raise HTTPException(403, "Only the Network Founder can request project verification.")
-        if n.type != "Project": raise HTTPException(400, "Project verification is for Project Networks.")
-        st, sid = "network", n.id
-    else:
-        st, sid = "user", user.id
-    if db.scalar(select(Verification.id).where(Verification.subject_type == st, Verification.subject_id == sid, Verification.kind == data.kind,
-                                               Verification.status.in_(["pending", "verified"]))):
-        raise HTTPException(409, "A request for this verification already exists.")
-    v = Verification(subject_type=st, subject_id=sid, kind=data.kind, status="pending", provider="",
-                     detail=clean(data.detail, 300) or "Awaiting a verification provider (none connected in this beta).", requested_by=user.id)
+    """Only identity is requested here, and it stays pending: identity needs a KYC provider, which isn't connected.
+    Wallet, domain, dev-wallet, metadata-authority and CTO verification have real flows under /api/verify/*."""
+    if data.kind != "identity":
+        raise HTTPException(400, "Use the signing/domain flows for wallet, project, dev wallet and metadata verification.")
+    if db.scalar(select(Verification.id).where(Verification.subject_type == "user", Verification.subject_id == user.id, Verification.kind == "identity",
+                                               Verification.status == "pending")):
+        raise HTTPException(409, "An identity request is already pending.")
+    v = Verification(subject_type="user", subject_id=user.id, kind="identity", status="pending", provider="",
+                     detail="Pending: needs a KYC provider (none connected in this beta).", requested_by=user.id)
     db.add(v); commit(db)
     return {"id": v.id, "kind": v.kind, "status": v.status, "detail": v.detail}
 
@@ -1357,6 +1418,11 @@ async def ws(websocket: WebSocket):
         hub.unregister(websocket)
         if uid: hub.users[uid].discard(websocket)
         for r in rooms: hub.rooms[r].discard(websocket)
+
+
+# ================================================================= TRUST: moderation, verification, CTO, activity
+from . import trust  # noqa: E402  (router module imports helpers from this module)
+app.include_router(trust.router)
 
 
 # ================================================================= STATIC SPA

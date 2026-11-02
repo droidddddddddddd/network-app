@@ -10,3 +10,6 @@ uploads/
 _reference/*
 !_reference/mockup.png
 *.zip
+.env.*
+!.env.example
+screenshots/*.tmp

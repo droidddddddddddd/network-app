@@ -205,7 +205,7 @@ def test_search_and_pagination(mk):
     a = mk("searchy9")
     net(a, "Searchable Guild")
     for i in range(35):
-        if i % 15 == 0: security._hits.clear()
+        if i % 4 == 0: security.reset_rate_limits()
         a.ok("POST", "/api/posts", json={"body": f"page post {i}"})
     p1 = a.ok("GET", "/api/feed?tab=network"); assert len(p1) == 30
     p2 = a.ok("GET", f"/api/feed?tab=network&before={p1[-1]['id']}"); assert len(p2) >= 5
@@ -215,10 +215,11 @@ def test_search_and_pagination(mk):
 
 def test_verification_never_fake(mk):
     a = mk()
-    v = a.ok("POST", "/api/verifications", json={"kind": "wallet"})
+    assert a.post("/api/verifications", json={"kind": "wallet"}).status_code == 400  # wallets need a real signature
+    a.ok("POST", "/api/verifications", json={"kind": "identity"})
     p = a.ok("GET", f"/api/users/{a.username}")
     assert all(not x["verified"] for x in p["verification"].values())
-    assert p["verification"]["wallet"]["status"] == "pending"
+    assert p["verification"]["identity"]["status"] == "needs KYC provider"
     assert a.post("/api/verifications", json={"kind": "trading"}).status_code == 422
 
 

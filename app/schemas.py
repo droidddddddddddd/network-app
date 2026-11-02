@@ -155,6 +155,7 @@ class Perms(BaseModel):
     share_events: bool = False
     share_activity: bool = False
     display_public: bool = False
+    activity_types: list[str] = Field(default_factory=list, max_length=10)
 
 
 class AdminPerms(BaseModel):
@@ -287,6 +288,18 @@ class CallIn(BaseModel):
 
 class ReportIn(BaseModel):
     reason: str = Field(min_length=3, max_length=300)
+
+
+class ReportCreate(BaseModel):
+    target_type: str = Field(pattern="^(post|user|network)$")
+    target: str = Field(min_length=1, max_length=40)  # post id, username or network slug
+    reason: str = Field(min_length=3, max_length=300)
+
+
+class ResolveIn(BaseModel):
+    action: str = Field(pattern="^(dismiss|hide_post|remove_post|suspend_user)$")
+    note: str = Field(default="", max_length=300)
+    suspend_hours: int | None = Field(default=None, ge=1, le=24 * 365)  # None = indefinite
 
 
 class OnboardingIn(BaseModel):

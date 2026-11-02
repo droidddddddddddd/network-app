@@ -19,6 +19,9 @@ USERS = [
 
 
 def run():
+    import os
+    if os.getenv("ENV") == "production" and os.getenv("SEED_DEMO", "").lower() != "true":
+        raise SystemExit("Refusing to load demo data in production. Set SEED_DEMO=true to override.")
     db = SessionLocal()
     if db.scalar(select(User).where(User.username == "alpha_annie")):
         print("demo data already present"); return
