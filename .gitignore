@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+network.db
+*.db
+.localdb/
+uploads/
+.env
+_reference/*
+!_reference/mockup.png
+*.zip
