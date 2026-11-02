@@ -33,9 +33,12 @@ UPLOADS.mkdir(parents=True, exist_ok=True)
 @asynccontextmanager
 async def lifespan(app):
     hub.loop = asyncio.get_running_loop()
+    from .db import URL as _DBURL
+    await asyncio.to_thread(hub.start, _DBURL)  # no-op unless REALTIME_BACKEND=postgres
     task = asyncio.create_task(dex.tracker_loop()) if os.getenv("DISABLE_TRACKER") != "1" else None
     cto_task = asyncio.create_task(cto_loop()) if os.getenv("DISABLE_TRACKER") != "1" else None
     yield
+    hub.stop()
     for t in (task, cto_task):
         if t: t.cancel()
 
@@ -117,7 +120,9 @@ def me_out(db, u: User):
     unread = db.scalar(select(func.count(Notification.id)).where(Notification.user_id == u.id, Notification.read.is_(False))) or 0
     unread_dm = db.scalar(select(func.count(Message.id)).where(Message.recipient_id == u.id, Message.read.is_(False))) or 0
     rep = user_reputation(db, u.id)
-    return {**user_brief(u), "email": u.email, "bio": u.bio, "x_handle": u.x_handle, "telegram": u.telegram, "website": u.website,
+    from .oauth import has_password, PLACEHOLDER_EMAIL
+    return {**user_brief(u), "email": "" if u.email.endswith(PLACEHOLDER_EMAIL) else u.email, "has_password": has_password(u),
+            "linked_accounts": linked_accounts_out(db, u.id, True), "bio": u.bio, "x_handle": u.x_handle, "telegram": u.telegram, "website": u.website,
             "wallet_address": u.wallet_address, "wallet_verified": u.wallet_verified,
             "privacy": {k: getattr(u, k) for k in PRIVACY_KEYS}, "unread_notifications": unread, "unread_messages": unread_dm,
             "level": rep["level"], "xp": rep["xp"], "level_progress": rep["level_progress"],
@@ -254,6 +259,7 @@ def get_profile(username: str, viewer: User | None = Depends(optional_user), db:
             "website": u.website if show["show_socials"] else "",
             "wallet_address": u.wallet_address if show["show_wallet"] else "",
             "verification": verification_status(db, "user", u.id, ind["verified_trading_performance"]),
+            "linked_accounts": linked_accounts_out(db, u.id, me_view),
             "followers": followers, "following": following, "is_following": is_following, "blocked": blocked, "is_me": me_view,
             "networks_founded": founded if show["show_networks"] else [], "networks_joined": joined if show["show_networks"] else [],
             "network_connections": conns if show["show_networks"] else [], "projects_supported": projects if show["show_networks"] else [],
@@ -368,6 +374,8 @@ def create_post(data: PostIn, user: User = Depends(current_user), db: Session = 
     if net_id:
         net = db.get(Network, net_id)
         if not net: raise HTTPException(404, "Network not found.")
+        from .trust import active_network_ban
+        if active_network_ban(db, net_id, user.id): raise HTTPException(403, "You're banned from this Network.")
         m = membership(db, net_id, user.id)
         if not data.parent_id and not is_active(m): raise HTTPException(403, "Join this network to post in it.")
         if not data.parent_id and m.role == "member" and not net.members_can_post: raise HTTPException(403, "In this Network only the founder and admins can post.")
@@ -579,6 +587,12 @@ def join(slug: str, invite: str = "", user: User = Depends(current_user), db: Se
     n = get_network(db, slug)
     m = membership(db, n.id, user.id)
     if is_active(m): raise HTTPException(400, "You're already a member.")
+    from .trust import active_network_ban
+    from .models import NetworkBan
+    ban = active_network_ban(db, n.id, user.id)
+    if ban: raise HTTPException(403, "You're banned from this Network" + (f" until {iso(ban.until)}" if ban.until else "") + ". You can appeal from the Network page.")
+    if m and m.status == "removed" and db.scalar(select(NetworkBan.id).where(NetworkBan.network_id == n.id, NetworkBan.user_id == user.id)):
+        m.status = "left"  # a ban that expired or was lifted: they may rejoin normally
     inv = valid_invite(db, invite, n.id, user.id) if invite else None
     if m and m.status == "pending" and not inv: raise HTTPException(400, "Your request is already pending.")
     if m and m.status == "removed" and not inv: raise HTTPException(403, "You were removed from this Network.")
@@ -1218,7 +1232,7 @@ def search(q: str = Query("", max_length=60), type: str = "", viewer: User | Non
 @app.get("/health")
 def health(db: Session = Depends(get_db)):
     db.execute(select(1))
-    return {"ok": True, "db": "sqlite" if IS_SQLITE else "postgresql"}
+    return {"ok": True, "realtime": "postgres" if hub._thread else "local", "db": "sqlite" if IS_SQLITE else "postgresql"}
 
 
 # ================================================================= INVITES
@@ -1315,19 +1329,11 @@ def delete_event(eid: int, user: User = Depends(current_user), db: Session = Dep
 
 
 # ================================================================= VERIFICATION (pluggable; no provider connected)
-@app.post("/api/verifications", dependencies=[rate_limit("verify", 5, 3600)])
-def request_verification(data: VerifyIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    """Only identity is requested here, and it stays pending: identity needs a KYC provider, which isn't connected.
-    Wallet, domain, dev-wallet, metadata-authority and CTO verification have real flows under /api/verify/*."""
-    if data.kind != "identity":
-        raise HTTPException(400, "Use the signing/domain flows for wallet, project, dev wallet and metadata verification.")
-    if db.scalar(select(Verification.id).where(Verification.subject_type == "user", Verification.subject_id == user.id, Verification.kind == "identity",
-                                               Verification.status == "pending")):
-        raise HTTPException(409, "An identity request is already pending.")
-    v = Verification(subject_type="user", subject_id=user.id, kind="identity", status="pending", provider="",
-                     detail="Pending: needs a KYC provider (none connected in this beta).", requested_by=user.id)
-    db.add(v); commit(db)
-    return {"id": v.id, "kind": v.kind, "status": v.status, "detail": v.detail}
+@app.post("/api/verifications")
+def request_verification():
+    """Retired. Identity is now account linking (X / Google sign-in, see app/oauth.py); wallet, domain, dev-wallet,
+    metadata-authority and CTO verification have real flows under /api/verify/*. No third-party KYC is used."""
+    raise HTTPException(410, "Identity checks now use account linking: link X or Google from Settings. This is account ownership, not a government ID check.")
 
 
 # ================================================================= NETWORK INTELLIGENCE
@@ -1421,8 +1427,9 @@ async def ws(websocket: WebSocket):
 
 
 # ================================================================= TRUST: moderation, verification, CTO, activity
-from . import trust  # noqa: E402  (router module imports helpers from this module)
+from . import trust, oauth  # noqa: E402  (router modules import helpers from this module)
 app.include_router(trust.router)
+app.include_router(oauth.router)
 
 
 # ================================================================= STATIC SPA

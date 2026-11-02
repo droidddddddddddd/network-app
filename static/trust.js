@@ -56,10 +56,10 @@ async function modQueue(el, slug = '') {
     <p class="tiny muted">Every action is audit-logged and the reporter is notified.${slug ? ' Suspensions are handled by platform admins.' : ''}</p>
     ${q.map(r => `<div class="li" style="align-items:flex-start"><div class="grow"><span class="pill a">${esc(r.target_type)}</span> ${r.count > 1 ? `<span class="pill">${r.count} reports</span>` : ''} <span class="tiny muted">${ago(r.created_at)} by @${esc(r.reporter?.username || '?')}${r.network ? ' · ' + esc(r.network.name) : ''}</span>
       ${tgt(r)}<div class="small"><b>Reason:</b> ${esc(r.reason)}</div>${r.status === 'resolved' ? `<div class="tiny green">Resolved: ${esc(r.resolution.replace(/_/g, ' '))} · ${ago(r.resolved_at)}</div>` : ''}</div>
-      ${r.status === 'open' ? `<div class="row wrap"><button class="btn sm" data-rs="dismiss" data-rid="${r.id}">Dismiss</button>${r.target_type === 'post' ? `<button class="btn sm" data-rs="hide_post" data-rid="${r.id}">Hide post</button><button class="btn danger sm" data-rs="remove_post" data-rid="${r.id}">Remove post</button>` : ''}${platform && r.target_type !== 'network' ? `<button class="btn danger sm" data-rs="suspend_user" data-rid="${r.id}">Suspend user</button>` : ''}</div>` : ''}</div>`).join('') || '<p class="muted small">Nothing here.</p>'}</div>`;
+      ${r.status === 'open' ? `<div class="row wrap"><button class="btn sm" data-rs="dismiss" data-rid="${r.id}">Dismiss</button>${r.target_type === 'post' ? `<button class="btn sm" data-rs="hide_post" data-rid="${r.id}">Hide post</button><button class="btn danger sm" data-rs="remove_post" data-rid="${r.id}">Remove post</button>` : ''}${platform && r.target_type !== 'network' ? `<button class="btn danger sm" data-rs="suspend_user" data-rid="${r.id}">Suspend user</button>` : ''}${slug && r.target_type !== 'network' ? `<button class="btn danger sm" data-rs="network_ban" data-rid="${r.id}">Ban from Network</button>` : ''}</div>` : ''}</div>`).join('') || '<p class="muted small">Nothing here.</p>'}</div>`;
   el.querySelectorAll('[data-rs]').forEach(b => b.onclick = async () => {
     const body = { action: b.dataset.rs, note: '' };
-    if (body.action === 'suspend_user') { const h = prompt('Suspend for how many hours? Leave empty for indefinite.'); if (h === null) return; if (h.trim()) { body.suspend_hours = parseInt(h, 10); if (!(body.suspend_hours > 0)) return toast('Enter a number of hours', true); } }
+    if (body.action === 'suspend_user' || body.action === 'network_ban') { const h = prompt(body.action === 'network_ban' ? 'Ban from this Network for how many hours? Leave empty for indefinite.' : 'Suspend for how many hours? Leave empty for indefinite.'); if (h === null) return; if (h.trim()) { body.suspend_hours = parseInt(h, 10); if (!(body.suspend_hours > 0)) return toast('Enter a number of hours', true); } }
     body.note = prompt('Note for the audit log (optional)') || '';
     try { const r = await api(`/reports/${b.dataset.rid}/resolve`, { body }); toast(`Resolved ${r.resolved} report(s)`); route(); } catch (e) { fail(e); }
   });
@@ -86,7 +86,9 @@ async function tokenTrustPanel(el, n, P_) {
     ${manage ? `<form id="domf" class="row wrap" style="margin:6px 0 12px"><input class="in grow" name="domain" placeholder="example.com" value="${esc(t.domain?.domain || '')}" maxlength="253"><button class="btn sm" type="submit">Get verification code</button>${t.domain && t.domain.status !== 'verified' ? '<button class="btn primary sm" type="button" id="domchk">Check now</button>' : ''}<div class="err" style="width:100%"></div><div id="domi" class="tiny" style="width:100%"></div></form>` : ''}
     <div class="factor"><span><b>Token</b></span>${t.mint ? `<span class="small" style="font-family:monospace">${esc(shortAddr(t.mint))}</span>` : '<span class="small muted" style="text-align:right;flex:1">No token set yet</span>'}</div>
     <div class="factor"><span><b>Dev wallet</b></span>${st(t.devwallet)}</div>
-    ${ev ? `<div class="factor"><span><b>Creator wallet balance</b> <span class="tiny muted">(read-only, ${esc(ev.wallet_short)})</span></span><span class="small">${ev.error ? esc(ev.error) : `${kfmt(ev.balance)} tokens · ${esc(ev.summary)}${ev.last_activity ? ' · last activity ' + ago(ev.last_activity * 1000) : ''}`}</span></div>` : ''}
+    ${ev ? `<div class="factor"><span><b>Creator wallet</b> <span class="tiny muted">(read-only, <a class="green" href="https://solscan.io/account/${esc(ev.wallet)}" target="_blank" rel="noopener nofollow">${esc(ev.wallet_short)}</a>)</span></span><span class="small">${ev.error ? esc(ev.error) : `${kfmt(ev.balance)} tokens now${ev.last_activity ? ' · last token activity ' + ago(ev.last_activity * 1000) : ''}`}</span></div>
+    ${ev.summary ? `<p class="small" style="margin:4px 0 0">${esc(ev.summary)}</p>` : ''}
+    ${ev.flows && ev.flows.recent.length ? `<details class="small"><summary class="muted">Dev wallet token history (${ev.flows.checked_txs} transactions checked)</summary>${ev.flows.recent.slice().reverse().map(e => `<div class="li tiny"><span class="pill ${e.kind === 'sold' ? 'r' : e.kind === 'transferred' ? 'a' : ''}">${esc(e.kind.replace(/_/g, ' '))}</span><span class="grow">${kfmt(e.amount)}${e.venue ? ' via ' + esc(e.venue) : ''}${e.to ? ' to ' + e.to.slice(0, 2).map(w => `<a class="green" href="https://solscan.io/account/${esc(w)}" target="_blank" rel="noopener nofollow">${esc(shortAddr(w))}</a>`).join(', ') : ''}</span><a class="muted" href="https://solscan.io/tx/${esc(e.signature)}" target="_blank" rel="noopener nofollow">${e.block_time ? ago(e.block_time * 1000) : 'tx'}</a></div>`).join('')}<p class="tiny muted">Sold = the tokens left in a swap through a DEX program (pump.fun, PumpSwap, Raydium, Jupiter, Meteora, Orca). Transferred = sent to another wallet with no swap; that wallet may also belong to the dev.</p></details>` : ''}` : ''}
     <div class="factor"><span><b>Metadata authority</b></span>${st(t.metadata)}</div>
     ${manage ? `<form id="mintf" class="row wrap" style="margin-top:10px"><input class="in grow" name="mint" placeholder="Token mint address" value="${esc(t.mint || '')}" maxlength="44">
       <button class="btn sm" type="button" data-sig="devwallet">Verify dev wallet (sign)</button>${t.devwallet ? '<button class="btn sm" type="button" id="devre">Re-check</button>' : ''}<button class="btn sm" type="button" data-sig="metadata">Verify metadata authority (sign)</button><button class="btn ghost sm" type="button" id="ctonew">Start a CTO claim</button><div class="err" style="width:100%"></div></form>` : ''}
@@ -140,3 +142,32 @@ on(/^\/achievements$/, async c => {
     <div class="bar" style="max-width:420px"><i style="width:${Math.round(r.level_progress * 100)}%"></i></div><p class="tiny muted">${Math.round(r.level_progress * 100)}% of the way to level ${r.level + 1}. XP comes only from on-platform records (posts in Networks, replies, collaborations, endorsements, tracked calls). It can't be bought and there are no token rewards.</p></div>
     <div class="card"><h3 style="margin-top:0">Achievements</h3>${goals.map(([code, name, how, v, need]) => `<div class="li"><span style="font-size:20px">${have.has(code) ? '🏅' : '○'}</span><div class="grow"><b>${esc(name)}</b><div class="tiny muted">${esc(how)}</div><div class="bar"><i style="width:${Math.min(100, Math.round((v || 0) / need * 100))}%"></i></div></div><span class="small ${have.has(code) ? 'green' : 'muted'}">${have.has(code) ? 'Earned' : `${Math.min(v || 0, need)}/${need}`}</span></div>`).join('')}</div>`;
 }, { k: 'me', auth: true });
+
+// ---------------------------------------------------------------- Network-scoped bans (this Network only, never platform-wide)
+function networkBanModal(n, username) {
+  modal(`<h3>Ban @${esc(username)} from ${esc(n.name)}</h3><p class="tiny muted">Applies to this Network only: they can't post, reply or rejoin here. Their account elsewhere on NETWORK is unaffected. It's recorded in the audit log, and they can appeal once.</p>
+    <form id="bnf"><label class="f"><span>Reason (shown to them)</span><input class="in" name="reason" required minlength="3" maxlength="300"></label>
+    <label class="f"><span>Duration in hours (empty = until lifted)</span><input class="in" type="number" name="hours" min="1" max="8760"></label><div class="err"></div><button class="btn danger" type="submit">Ban from Network</button></form>`, c2 => {
+    const f = $('#bnf', c2); f.addEventListener('submit', e => { e.preventDefault(); submitForm(f, async () => {
+      const h = fval(f, 'hours'); await api(`/networks/${n.slug}/bans`, { body: { username, reason: fval(f, 'reason'), hours: h ? parseInt(h, 10) : null } }); closeModal(); toast('Banned from this Network'); route(); }); }); });
+}
+async function networkBansCard(el, n) {
+  let bans; try { bans = await api(`/networks/${n.slug}/bans`); } catch { return; }
+  const act = bans.filter(b => b.active); if (!act.length) return;
+  const card = document.createElement('div'); card.className = 'card';
+  card.innerHTML = `<h3 style="margin-top:0">Banned from this Network (${act.length})</h3>${act.map(b => `<div class="li small">${avatar(b.user, 'sm')}<div class="grow"><b>@${esc(b.user.username)}</b> · ${esc(b.reason)}
+    <div class="tiny muted">by @${esc(b.banned_by.username)} ${ago(b.created_at)} · ${b.indefinite ? 'until lifted' : 'until ' + new Date(b.until).toLocaleString()}</div>
+    ${b.appeal ? `<div class="tiny amber">Appeal ${ago(b.appealed_at)}: “${esc(b.appeal)}”</div>` : ''}</div><button class="btn sm" data-unban="${esc(b.user.username)}">Lift ban</button></div>`).join('')}`;
+  el.appendChild(card);
+  card.querySelectorAll('[data-unban]').forEach(x => x.onclick = async () => { if (!confirm(`Lift the ban on @${x.dataset.unban}?`)) return;
+    try { await api(`/networks/${n.slug}/bans/${x.dataset.unban}`, { method: 'DELETE' }); toast('Ban lifted'); route(); } catch (e) { fail(e); } });
+}
+function networkBanNotice(host, n, b) {
+  if (!host) return;
+  const d = document.createElement('div'); d.className = 'card'; d.style.border = '1px solid #e5484d'; d.style.marginTop = '14px';
+  d.innerHTML = `<b>You're banned from ${esc(n.name)}</b><p class="small">${esc(b.reason)} · ${b.indefinite ? 'until a Network admin lifts it' : 'until ' + new Date(b.until).toLocaleString()}</p>
+    <p class="tiny muted">This applies to this Network only. The rest of NETWORK works normally.</p>
+    ${b.appeal ? `<p class="tiny">Appeal sent ${ago(b.appealed_at)}. The Network's moderators were notified.</p>` : `<form id="apf"><textarea class="in" name="text" minlength="10" maxlength="1000" rows="2" required placeholder="Explain why the ban should be lifted (one appeal per ban)"></textarea><div class="err"></div><button class="btn sm" type="submit">Send appeal</button></form>`}`;
+  host.after(d);
+  const f = $('#apf', d); f?.addEventListener('submit', e => { e.preventDefault(); submitForm(f, async () => { await api(`/networks/${n.slug}/bans/appeal`, { body: { text: fval(f, 'text') } }); toast('Appeal sent'); route(); }); });
+}

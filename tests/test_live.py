@@ -23,3 +23,17 @@ def test_live_balance_lookup():
     assert b["raw"] >= 0 and isinstance(b["accounts"], list)
     top = chain.largest_holders(PUMP_MINT)
     assert top and all("owner" in h for h in top)
+
+
+def test_live_creation_tx():
+    r = chain.creation_tx(PUMP_MINT)
+    if chain.is_helius():
+        assert r["creator"] == PUMP_CREATOR and "create instruction" in r["method"]
+    else:  # busy token: public RPC can't page back far enough, and must say so instead of guessing
+        assert r.get("creator") == PUMP_CREATOR or (r.get("incomplete") and not r.get("creator"))
+
+
+def test_live_dev_token_flows():
+    f = chain.dev_token_flows(PUMP_CREATOR, PUMP_MINT)
+    assert f["checked_txs"] >= 1 and f["acquired"] > 0
+    assert f["sold"] > 0 and "PumpSwap" in f["venues"] and f["transferred"] == 0

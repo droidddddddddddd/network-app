@@ -109,7 +109,8 @@ def test_devwallet_verification_mocked(mk, monkeypatch):
     assert g.post(f"/api/networks/{n2['slug']}/verify/devwallet", json=body).status_code == 409
     # a non-creator wallet: earliest-tx fallback also says no -> Not verified with reason
     k2, w2 = kp(); mint2 = addr()
-    monkeypatch.setattr(chain, "earliest_tx_signers", lambda m, max_pages=None: {"signers": [w], "fee_payer": w, "method": "fee payer / signer of the mint's earliest transaction"})
+    monkeypatch.setattr(chain, "creation_tx", lambda m: {"creator": w, "method": "fee payer of the mint's creation transaction"})
+    monkeypatch.setattr(chain, "helius_asset", lambda m: None)
     monkeypatch.setattr(chain, "metadata_authority", lambda m: None)
     body, _ = sign(g, k2, w2, "devwallet", mint2)
     r = g.ok("POST", f"/api/networks/{n2['slug']}/verify/devwallet", json=body)
@@ -118,15 +119,20 @@ def test_devwallet_verification_mocked(mk, monkeypatch):
     body, _ = sign(g, k, w, "devwallet", mint2)
     monkeypatch.setattr(chain, "pump_creator", lambda m: None)
     r = g.ok("POST", f"/api/networks/{n2['slug']}/verify/devwallet", json=body)
-    assert r["verified"] and "earliest transaction" in r["method"]
+    assert r["verified"] and "creation transaction" in r["method"]
     # recheck after the creator changes (e.g. data was wrong) lapses it
-    monkeypatch.setattr(chain, "earliest_tx_signers", lambda m, max_pages=None: {"signers": [addr()], "fee_payer": "", "method": "x"})
+    monkeypatch.setattr(chain, "creation_tx", lambda m: {"incomplete": True, "reason": "History too long"})
     assert not g.ok("POST", f"/api/networks/{n2['slug']}/verify/devwallet/recheck")["verified"]
     # Creator wallet balance shown read-only
     monkeypatch.setattr(chain, "token_balance", lambda o, m: {"ui": 0.0, "raw": 0, "accounts": []})
     monkeypatch.setattr(chain, "token_supply", lambda m: {"ui": 1e9, "raw": 10**15, "decimals": 6})
+    monkeypatch.setattr(chain, "dev_token_flows", lambda o, m: {"events": [], "complete": True, "checked_txs": 3, "acquired": 100.0, "sold": 60.0,
+        "transferred": 40.0, "burned_or_unclassified": 0, "venues": ["PumpSwap"], "destinations": [{"wallet": w2, "amount": 40.0}]})
     tt = f.ok("GET", f"/api/networks/{n['slug']}/token-trust")
-    assert tt["devwallet"]["status"] == "verified" and tt["dev_evidence"]["summary"].startswith("Original dev wallet holds 0.00%")
+    ev = tt["dev_evidence"]
+    assert tt["devwallet"]["status"] == "verified" and ev["summary"].startswith("Original dev wallet holds 0.00%")
+    assert "sold 60 via PumpSwap" in ev["summary"] and "transferred 40" in ev["summary"] and "not a sale" in ev["summary"]
+    assert ev["flows"]["destinations"][0]["wallet"] == w2
 
 
 def test_metadata_authority(mk, monkeypatch):
@@ -335,3 +341,121 @@ def test_rankings_snapshot(mk, monkeypatch):
     assert r1["computed_at"] == r2["computed_at"] and r2["ttl_seconds"] == 300
     monkeypatch.setenv("RANKINGS_TTL", "0")
     assert a.ok("GET", "/api/rankings")["computed_at"] != r1["computed_at"]
+
+
+# ---------------------------------------------------------------- creation tx / flows parsing (synthetic transactions)
+def _tb(owner, mint, amount, idx=0):
+    return {"accountIndex": idx, "mint": mint, "owner": owner, "uiTokenAmount": {"amount": str(amount), "decimals": 6}}
+
+
+def _tx(sig, programs, pre, post, keys=None, ixs=None):
+    return {"blockTime": 1700000000, "meta": {"err": None, "preTokenBalances": pre, "postTokenBalances": post,
+            "innerInstructions": [{"instructions": [{"programId": p} for p in programs[1:]]}]},
+            "transaction": {"signatures": [sig], "message": {"accountKeys": [{"pubkey": k} for k in (keys or [])],
+                            "instructions": ixs or [{"programId": programs[0]}]}}}
+
+
+def test_classify_sold_transferred_burned():
+    dev, other, mint = addr(), addr(), addr()
+    sold = chain.classify_flow(_tx("s1", ["ComputeBudget111111111111111111111111111111", "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA"],
+                                   [_tb(dev, mint, 5_000_000)], [_tb(dev, mint, 0)]), dev, mint)
+    assert sold["kind"] == "sold" and sold["venue"] == "PumpSwap" and sold["amount"] == 5
+    jup = chain.classify_flow(_tx("s2", ["JUP6LkbZbjS1jKKwapdHNy74zcZ3tQUs4ZMJXhkDPXo"], [_tb(dev, mint, 1_000_000)], [_tb(dev, mint, 0)]), dev, mint)
+    assert jup["kind"] == "sold" and jup["venue"] == "Jupiter"
+    tr = chain.classify_flow(_tx("t1", [chain.TOKEN_PROGRAM], [_tb(dev, mint, 3_000_000), _tb(other, mint, 0, 1)],
+                                 [_tb(dev, mint, 1_000_000), _tb(other, mint, 2_000_000, 1)]), dev, mint)
+    assert tr["kind"] == "transferred" and tr["to"] == [other] and tr["amount"] == 2
+    burn = chain.classify_flow(_tx("b1", [chain.TOKEN_PROGRAM], [_tb(dev, mint, 1_000_000)], [_tb(dev, mint, 0)]), dev, mint)
+    assert burn["kind"] == "burned_or_unclassified"
+    buy = chain.classify_flow(_tx("a1", [chain.PUMP_PROGRAM], [], [_tb(dev, mint, 7_000_000)]), dev, mint)
+    assert buy["kind"] == "acquired"
+    failed = _tx("f1", [chain.PUMP_PROGRAM], [_tb(dev, mint, 1)], [_tb(dev, mint, 0)]); failed["meta"]["err"] = {"x": 1}
+    assert chain.classify_flow(failed, dev, mint) is None
+
+
+def test_creation_tx_pump_create_and_bundles(monkeypatch):
+    mint, creator, bundler = addr(), addr(), addr()
+    def borsh(s): return len(s).to_bytes(4, "little") + s.encode()
+    data = bytes.fromhex("d6904cec5f8b31b4") + borsh("Coin") + borsh("CN") + borsh("https://x") + chain.b58decode(creator)
+    # bundled launch: fee payer is a bundler, several signers, but the create instruction names the creator
+    tx = _tx("c1", [chain.PUMP_PROGRAM], [], [], keys=[bundler, creator, mint],
+             ixs=[{"programId": chain.PUMP_PROGRAM, "data": chain.b58encode(data), "accounts": [mint, addr()]}])
+    monkeypatch.setattr(chain, "oldest_signature", lambda a, max_pages=None: {"signature": "c1", "block_time": 1, "how": "test"})
+    monkeypatch.setattr(chain, "get_tx", lambda s: tx)
+    r = chain.creation_tx(mint)
+    assert r["creator"] == creator and "create instruction" in r["method"]
+    # a non-pump token: fee payer only (never "any signer")
+    mint2 = addr()
+    tx2 = _tx("c2", ["TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"], [], [], keys=[creator, bundler, mint2])
+    monkeypatch.setattr(chain, "get_tx", lambda s: tx2)
+    r2 = chain.creation_tx(mint2)
+    assert r2["creator"] == creator and r2["method"].startswith("fee payer")
+    # cached persistently: works even after the RPC goes away
+    monkeypatch.setattr(chain, "get_tx", lambda s: (_ for _ in ()).throw(RuntimeError("down")))
+    assert chain.creation_tx(mint2)["creator"] == creator
+    # busy token without Helius: "couldn't determine", never a guess, and not cached
+    mint3 = addr()
+    monkeypatch.setattr(chain, "oldest_signature", lambda a, max_pages=None: {"incomplete": True})
+    r3 = chain.creation_tx(mint3)
+    assert r3["incomplete"] and not r3.get("creator")
+    monkeypatch.setattr(chain, "pump_creator", lambda m: None)
+    monkeypatch.setattr(chain, "helius_asset", lambda m: None)
+    monkeypatch.setattr(chain, "metadata_authority", lambda m: None)
+    f = chain.find_creator(mint3, creator)
+    assert not f["matched"] and f["reason"].startswith("Couldn't determine") and any("couldn't determine" in t for t in f["tried"])
+
+
+def test_oldest_signature_paging(monkeypatch):
+    monkeypatch.setattr(chain, "is_helius", lambda: False)
+    pages = [[{"signature": f"s{p}-{i}", "blockTime": 1} for i in range(1000)] for p in range(3)] + [[{"signature": "first", "blockTime": 0}]]
+    calls = []
+    def rpc(method, params):
+        calls.append(params[1].get("before")); return pages[len(calls) - 1]
+    monkeypatch.setattr(chain, "rpc", rpc)
+    assert chain.oldest_signature("A", max_pages=10)["signature"] == "first" and calls[1] == "s0-999"
+    calls.clear()
+    assert chain.oldest_signature("A", max_pages=2) == {"incomplete": True}
+    # Helius oldest-first path is a single request
+    monkeypatch.setattr(chain, "is_helius", lambda: True)
+    monkeypatch.setattr(chain, "rpc", lambda m, p: {"data": [{"signature": "genesis", "blockTime": 5}]} if m == "getTransactionsForAddress" else None)
+    assert chain.oldest_signature("A")["signature"] == "genesis"
+
+
+# ---------------------------------------------------------------- Network-scoped bans
+def test_network_ban_appeal_unban(mk):
+    f, adm, mem, other = mk(), mk(), mk(), mk()
+    n = f.ok("POST", "/api/networks", json={"name": "Ban Guild", "type": "Personal", "is_private": False, "description": "x"})
+    s = n["slug"]
+    for c in (adm, mem): c.ok("POST", f"/api/networks/{s}/join")
+    f.ok("POST", f"/api/networks/{s}/members/{adm.id}", json={"action": "make_admin"})
+    # plain members can't ban; admins without moderation permission can't either
+    assert mem.post(f"/api/networks/{s}/bans", json={"username": other.username, "reason": "spam"}).status_code == 403
+    f.ok("PUT", f"/api/networks/{s}/members/{adm.id}/perms", json={"perm_members": True, "perm_announce": False, "perm_connections": False,
+                                                                   "perm_settings": False, "perm_moderate": False, "perm_opportunities": False})
+    assert adm.post(f"/api/networks/{s}/bans", json={"username": mem.username, "reason": "spam"}).status_code == 403
+    f.ok("PUT", f"/api/networks/{s}/members/{adm.id}/perms", json={"perm_members": True, "perm_announce": False, "perm_connections": False,
+                                                                   "perm_settings": False, "perm_moderate": True, "perm_opportunities": False})
+    assert adm.post(f"/api/networks/{s}/bans", json={"username": f.username, "reason": "coup"}).status_code == 403  # founder can't be banned
+    b = adm.ok("POST", f"/api/networks/{s}/bans", json={"username": mem.username, "reason": "spamming links", "hours": 24})
+    assert b["active"] and not b["indefinite"]
+    # scoped: banned from this Network only
+    assert mem.post("/api/posts", json={"body": "hi", "network_id": n["id"]}).status_code == 403
+    assert mem.post(f"/api/networks/{s}/join").status_code == 403
+    mem.ok("POST", "/api/posts", json={"body": "still allowed on my own profile"})
+    assert mem.ok("GET", f"/api/networks/{s}/my-ban")["reason"] == "spamming links"
+    # appeal (once) -> moderators notified; unban restores membership
+    mem.ok("POST", f"/api/networks/{s}/bans/appeal", json={"text": "Sorry, that was a mistake, won't happen again."})
+    assert mem.post(f"/api/networks/{s}/bans/appeal", json={"text": "Sorry again, please reconsider my ban."}).status_code == 409
+    assert any("appealed" in x["text"] for x in f.ok("GET", "/api/notifications"))
+    assert f.ok("GET", f"/api/networks/{s}/bans")[0]["appeal"].startswith("Sorry")
+    assert f.ok("DELETE", f"/api/networks/{s}/bans/{mem.username}")["membership"] == "active"
+    mem.ok("POST", "/api/posts", json={"body": "back", "network_id": n["id"]})
+    # a ban of a non-member blocks joining; expiry lets them join again
+    f.ok("POST", f"/api/networks/{s}/bans", json={"username": other.username, "reason": "known scammer"})
+    assert other.post(f"/api/networks/{s}/join").status_code == 403
+    from app.models import NetworkBan, AuditLog
+    with SessionLocal() as db:
+        nb = db.query(NetworkBan).filter_by(user_id=other.id).one(); nb.until = utcnow() - timedelta(minutes=1); db.commit()
+        acts = {a.action for a in db.query(AuditLog).all()}
+    assert {"network.ban", "network.unban", "network.ban_appeal"} <= acts
+    other.ok("POST", f"/api/networks/{s}/join")

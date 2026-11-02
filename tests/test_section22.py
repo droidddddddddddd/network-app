@@ -215,12 +215,11 @@ def test_search_and_pagination(mk):
 
 def test_verification_never_fake(mk):
     a = mk()
-    assert a.post("/api/verifications", json={"kind": "wallet"}).status_code == 400  # wallets need a real signature
-    a.ok("POST", "/api/verifications", json={"kind": "identity"})
+    for k in ("wallet", "identity", "trading"):  # no self-requested verification of any kind; real flows only
+        assert a.post("/api/verifications", json={"kind": k}).status_code == 410
     p = a.ok("GET", f"/api/users/{a.username}")
     assert all(not x["verified"] for x in p["verification"].values())
-    assert p["verification"]["identity"]["status"] == "needs KYC provider"
-    assert a.post("/api/verifications", json={"kind": "trading"}).status_code == 422
+    assert "identity" not in p["verification"] and p["verification"]["x_account"]["status"] == "not linked"
 
 
 def test_onboarding_suggestions(mk):

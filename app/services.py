@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from statistics import median
 from sqlalchemy import select, func, or_, and_, not_, exists
 from sqlalchemy.orm import Session
-from .models import (NetworkActivity, ACTIVITY_TYPES, User, Network, Membership, Connection, Post, Like, Follow, Block, Notification, Endorsement,
+from .models import (LinkedAccount, NetworkActivity, ACTIVITY_TYPES, User, Network, Membership, Connection, Post, Like, Follow, Block, Notification, Endorsement,
                      Opportunity, Application, Call, ChatMessage, Report, Conversation, Verification, Achievement,
                      AuditLog, ReputationRecord, Event, SHARE_KEYS, ADMIN_PERMS)
 from .realtime import hub
@@ -126,7 +126,7 @@ def can_see_post(db, uid, post: Post) -> bool:
 # ---------------------------------------------------------------- serializers
 def user_brief(u: User):
     return {"id": u.id, "username": u.username, "display_name": u.display_name, "avatar_url": u.avatar_url,
-            "is_demo": u.is_demo, "identity_verified": u.identity_verified}
+            "is_demo": u.is_demo}
 
 
 def network_brief(n: Network, members=None):
@@ -324,7 +324,9 @@ def conversation_for(db, a: int, b: int, create=True):
 VERIFY_LABELS = {
     "wallet": ("Wallet ownership", "Proves control of a Solana wallet: you signed a one-time message with it (signMessage only, never a transaction). "
                "It says nothing about trustworthiness or trading performance."),
-    "identity": ("Identity", "Needs a KYC provider. None is connected in this beta, so identity can't be verified yet."),
+    "x_account": ("X account", "Proves this person signed in with that X account (OAuth). Account ownership only: not a government ID check."),
+    "google_account": ("Google account", "Proves this person signed in with a Google account whose email Google has verified (OpenID Connect). "
+                       "Account ownership only: not a government ID check. The email stays private unless they choose to show it."),
     "project": ("Project domain", "Proves the team controls the project's website domain (DNS TXT record or /.well-known/network-verify.txt)."),
     "devwallet": ("Dev wallet", "Proves the Network signed with the wallet that created the token on-chain. It proves control of the creator wallet only, not that the project is safe."),
     "metadata": ("Metadata authority", "Proves the team signed with the token's Metaplex update-authority wallet. Control only, not safety."),
@@ -337,7 +339,8 @@ def verification_status(db, subject_type: str, subject_id: int, trading: dict | 
     for v in db.scalars(select(Verification).where(Verification.subject_type == subject_type, Verification.subject_id == subject_id).order_by(Verification.id)):
         if v.kind not in rows or v.status == "verified" or rows[v.kind].status != "verified": rows[v.kind] = v
     out = {}
-    kinds = ["wallet", "identity", "trading"] if subject_type == "user" else ["project", "devwallet", "metadata", "identity", "trading"]
+    kinds = ["wallet", "x_account", "google_account", "trading"] if subject_type == "user" else ["project", "devwallet", "metadata", "trading"]
+    links = {la.provider: la for la in db.scalars(select(LinkedAccount).where(LinkedAccount.user_id == subject_id))} if subject_type == "user" else {}
     for k in kinds:
         label, how = VERIFY_LABELS[k]
         if k == "trading":
@@ -345,9 +348,16 @@ def verification_status(db, subject_type: str, subject_id: int, trading: dict | 
             out[k] = {"label": label, "verified": ok, "status": "tracked" if ok else "no tracked calls",
                       "provider": "NETWORK DexScreener tracker" if ok else "", "how": how,
                       "detail": trading.get("label", "") if trading else ""}
-        elif k == "identity":
-            out[k] = {"label": label, "verified": False, "status": "needs KYC provider", "provider": "", "how": how,
-                      "detail": "Identity verification: pending, needs a KYC provider (not connected)."}
+        elif k == "x_account":
+            la = links.get("x")
+            out[k] = {"label": label, "verified": bool(la), "status": "linked" if la else "not linked", "provider": "X OAuth 2.0" if la else "", "how": how,
+                      "badge": f"X account verified (@{la.handle})" if la else "", "detail": "Account ownership linked via X sign-in. Not government ID." if la else ""}
+        elif k == "google_account":
+            la = links.get("google")
+            ok = bool(la and la.email_verified)
+            out[k] = {"label": label, "verified": ok, "status": "linked" if ok else "not linked", "provider": "Google OpenID Connect" if ok else "", "how": how,
+                      "badge": "Google account verified" + (f" ({la.email})" if ok and la.show_email else "") if ok else "",
+                      "detail": "Verified-email Google account linked. Not government ID." if ok else ""}
         else:
             r = rows.get(k)
             out[k] = {"label": label, "verified": bool(r and r.status == "verified"), "status": r.status if r else "unverified",
@@ -392,3 +402,21 @@ def snapshot_reputation(db, subject_type, subject_id, score, level=1):
                      .order_by(ReputationRecord.id.desc()).limit(1))
     if not last or utcnow() - aware(last.created_at) > timedelta(hours=1):
         db.add(ReputationRecord(subject_type=subject_type, subject_id=subject_id, score=score, level=level))
+
+
+def linked_accounts_out(db, uid: int, me_view: bool):
+    """Linked X / Google accounts as shown on a Passport. Google email only to its owner, or publicly when opted in.
+    X account age and follower count are shown as light anti-sybil context; they add no reputation and can't be bought."""
+    out = []
+    for la in db.scalars(select(LinkedAccount).where(LinkedAccount.user_id == uid).order_by(LinkedAccount.provider)):
+        d = {"provider": la.provider, "linked_at": iso(la.created_at)}
+        if la.provider == "x":
+            age = (utcnow() - aware(la.account_created_at)).days if la.account_created_at else None
+            d.update(handle=la.handle, account_age_days=age, followers=la.followers, signals_checked_at=iso(la.refreshed_at),
+                     label=f"X account verified (@{la.handle})")
+        else:
+            d.update(email_verified=la.email_verified, label="Google account verified" if la.email_verified else "Google account linked (email not verified by Google)")
+            if me_view or la.show_email: d["email"] = la.email
+            if me_view: d["show_email"] = la.show_email
+        out.append(d)
+    return out

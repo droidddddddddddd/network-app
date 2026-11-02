@@ -297,7 +297,7 @@ class ReportCreate(BaseModel):
 
 
 class ResolveIn(BaseModel):
-    action: str = Field(pattern="^(dismiss|hide_post|remove_post|suspend_user)$")
+    action: str = Field(pattern="^(dismiss|hide_post|remove_post|suspend_user|network_ban)$")
     note: str = Field(default="", max_length=300)
     suspend_hours: int | None = Field(default=None, ge=1, le=24 * 365)  # None = indefinite
 

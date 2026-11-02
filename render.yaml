@@ -5,7 +5,7 @@ services:
     name: network-app
     runtime: python
     plan: free
-    numInstances: 1  # realtime chat/notifications hub is in-process; keep a single instance
+    numInstances: 1  # default realtime hub is in-process; set REALTIME_BACKEND=postgres before scaling out
     buildCommand: pip install -r requirements.txt
     startCommand: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips='*'
     healthCheckPath: /health
@@ -40,6 +40,19 @@ services:
         sync: false
       - key: S3_PUBLIC_BASE_URL
         sync: false
+      # Sign in / link with X and Google (buttons stay hidden until both id and secret are set)
+      - key: PUBLIC_BASE_URL
+        sync: false
+      - key: X_CLIENT_ID
+        sync: false
+      - key: X_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: REALTIME_BACKEND
+        value: local
 databases:
   - name: network-db
     plan: free

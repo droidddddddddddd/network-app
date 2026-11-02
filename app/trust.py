@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select, func, or_, desc
 from sqlalchemy.orm import Session
 from .db import get_db
-from .models import (User, Network, Membership, Connection, Post, Report, Verification, Nonce, NetworkActivity, CtoClaim, CtoBacking,
+from .models import (NetworkBan, User, Network, Membership, Connection, Post, Report, Verification, Nonce, NetworkActivity, CtoClaim, CtoBacking,
                      ACTIVITY_TYPES)
 from .security import current_user, optional_user, rate_limit, clean, is_platform_admin, ensure_active
 from .services import (utcnow, aware, iso, notify, audit, membership, is_active, can, network_brief, user_brief, my_network_ids,
@@ -143,13 +143,19 @@ def resolve(rid: int, data: ResolveIn, request: Request, user: User = Depends(cu
         u.suspended_until = utcnow() + timedelta(hours=data.suspend_hours) if data.suspend_hours else aware(__import__("datetime").datetime(9999, 1, 1))
         u.suspend_reason = clean(data.note, 300) or r.reason
         notify(db, u.id, None, "moderation", "Your account was suspended" + (f" for {data.suspend_hours}h" if data.suspend_hours else " indefinitely") + f". Reason: {u.suspend_reason}", "")
+    elif a == "network_ban":
+        if not r.network_id: raise HTTPException(400, "This report isn't tied to a Network.")
+        if not can(membership(db, r.network_id, user.id), "perm_moderate"): raise HTTPException(403, "Only this Network's moderators can ban from it.")
+        uid = r.target_id if r.target_type == "user" else (db.get(Post, r.target_id).author_id if r.target_type == "post" and db.get(Post, r.target_id) else None)
+        if not uid: raise HTTPException(400, "A Network ban applies to user or post reports.")
+        do_network_ban(db, db.get(Network, r.network_id), user, db.get(User, uid), data.suspend_hours, clean(data.note, 300) or r.reason, ip_of(request))
     # resolve every open report on the same target, and tell each reporter
     same = db.scalars(select(Report).where(Report.target_type == r.target_type, Report.target_id == r.target_id, Report.status == "open")).all()
     for x in same:
         x.status, x.resolution, x.resolved_by, x.resolved_at = "resolved", a, user.id, utcnow()
         notify(db, x.reporter_id, None, "report_resolved", f"Your report was reviewed. Outcome: {a.replace('_', ' ')}.", "")
     audit(db, user.id, r.network_id, f"moderation.{a}", f"{r.target_type}:{r.target_id}",
-          f"report:{r.id}; scope:{'platform' if platform and not net_mod else 'network'}; {clean(data.note, 200)}" + (f"; hours:{data.suspend_hours}" if a == "suspend_user" else ""), ip_of(request))
+          f"report:{r.id}; scope:{'platform' if platform and not net_mod else 'network'}; {clean(data.note, 200)}" + (f"; hours:{data.suspend_hours}" if a in ("suspend_user", "network_ban") else ""), ip_of(request))
     commit(db)
     return {"ok": True, "resolved": len(same)}
 
@@ -374,19 +380,32 @@ def verify_metadata(slug: str, data: SignedIn, request: Request, user: User = De
 
 
 def dev_evidence(mint: str, dev: str) -> dict:
-    """Read-only: the original dev wallet's current holding of the token."""
+    """Read-only evidence about the original dev wallet: current holding, plus what happened to its tokens, parsed from
+    its token-account history (swap through a DEX = sold; plain transfer = transferred, with destination)."""
     try:
         b, s = chain.token_balance(dev, mint), chain.token_supply(mint)
-        pct = (b["raw"] / s["raw"] * 100) if s["raw"] else 0
-        out = {"wallet": dev, "wallet_short": short(dev), "balance": b["ui"], "pct": round(pct, 4)}
-        out["summary"] = f"Original dev wallet holds {pct:.2f}% of supply" + (" (holds none now)" if b["raw"] == 0 else "")
-        try:
-            la = chain.last_activity(dev, mint) if b["accounts"] else None
-            out["last_activity"] = la
-        except Exception: out["last_activity"] = None
-        return out
     except Exception as e:
-        return {"wallet": dev, "wallet_short": short(dev), "error": f"Balance lookup unavailable ({str(e)[:60]})"}
+        return {"wallet": dev, "wallet_short": short(dev), "error": f"Balance lookup unavailable ({type(e).__name__})"}
+    pct = (b["raw"] / s["raw"] * 100) if s["raw"] else 0
+    out = {"wallet": dev, "wallet_short": short(dev), "balance": b["ui"], "pct": round(pct, 4), "flows": None}
+    parts = [f"Original dev wallet holds {pct:.2f}% of supply" + (" (none now)" if b["raw"] == 0 else "")]
+    try:
+        f = chain.dev_token_flows(dev, mint)
+        out["flows"] = {k: f[k] for k in ("complete", "checked_txs", "acquired", "sold", "transferred", "burned_or_unclassified", "venues")}
+        out["flows"]["destinations"] = [{"wallet": d["wallet"], "wallet_short": short(d["wallet"]), "amount": d["amount"]} for d in f["destinations"][:5]]
+        out["flows"]["recent"] = [{k: e.get(k) for k in ("kind", "amount", "venue", "to", "signature", "block_time")} for e in f["events"][-10:]]
+        if f["sold"]: parts.append(f"sold {f['sold']:,.0f} via {', '.join(f['venues'])} (swap transactions)")
+        if f["transferred"]:
+            parts.append(f"transferred {f['transferred']:,.0f} to " + ", ".join(short(d["wallet"]) for d in f["destinations"][:3])
+                         + " (a plain transfer, not a sale; the destination may be another wallet the dev controls)")
+        if f["burned_or_unclassified"]: parts.append(f"{f['burned_or_unclassified']:,.0f} left without a recipient (burn or unclassified)")
+        if not f["complete"]: parts.append(f"only the latest {f['checked_txs']} token transactions were checked")
+        out["last_activity"] = max((e["block_time"] or 0 for e in f["events"]), default=None) or None
+    except Exception as e:
+        parts.append(f"token history unavailable ({type(e).__name__})")
+        out["last_activity"] = None
+    out["summary"] = "; ".join(parts) + "."
+    return out
 
 
 @router.get("/api/networks/{slug}/token-trust")
@@ -607,3 +626,111 @@ def connected_activity(user: User = Depends(current_user), db: Session = Depends
                                                         .order_by(desc(NetworkActivity.id)).limit(20))]
     out.sort(key=lambda x: x["created_at"], reverse=True)
     return out[:50]
+
+
+# ================================================================= NETWORK-SCOPED BANS (not platform-wide)
+def active_network_ban(db, network_id: int, user_id: int):
+    b = db.scalar(select(NetworkBan).where(NetworkBan.network_id == network_id, NetworkBan.user_id == user_id, NetworkBan.lifted_at.is_(None))
+                  .order_by(desc(NetworkBan.id)))
+    if b and b.until and aware(b.until) <= utcnow(): return None
+    return b
+
+
+def ban_out(db, b, admin_view=True):
+    u = db.get(User, b.user_id)
+    d = {"id": b.id, "user": user_brief(u), "reason": b.reason, "until": iso(b.until) if b.until else None, "indefinite": b.until is None,
+         "created_at": iso(b.created_at), "appeal": b.appeal, "appealed_at": iso(b.appealed_at) if b.appealed_at else None,
+         "lifted_at": iso(b.lifted_at) if b.lifted_at else None,
+         "active": b.lifted_at is None and (b.until is None or aware(b.until) > utcnow())}
+    if admin_view: d["banned_by"] = user_brief(db.get(User, b.banned_by))
+    return d
+
+
+def can_ban(db, n, actor, target):
+    m = membership(db, n.id, actor.id)
+    if not can(m, "perm_moderate"): raise HTTPException(403, "Only the Network Founder and Admins with moderation permission can ban members.")
+    if target.id == actor.id: raise HTTPException(400, "You can't ban yourself.")
+    tm = membership(db, n.id, target.id)
+    if tm and tm.role == "founder": raise HTTPException(403, "The Founder can't be banned from their own Network.")
+    if tm and tm.role == "admin" and is_active(tm) and m.role != "founder": raise HTTPException(403, "Only the Founder can ban an Admin.")
+    return m
+
+
+def do_network_ban(db, n, actor, target, hours, reason, ip):
+    can_ban(db, n, actor, target)
+    if active_network_ban(db, n.id, target.id): raise HTTPException(409, "That user is already banned from this Network.")
+    tm = membership(db, n.id, target.id)
+    b = NetworkBan(network_id=n.id, user_id=target.id, banned_by=actor.id, reason=reason[:300],
+                   until=utcnow() + timedelta(hours=hours) if hours else None, prev_status=tm.status if tm else "")
+    db.add(b)
+    if tm:
+        tm.status, tm.role, tm.left_at = "removed", "member", utcnow()
+    notify(db, target.id, actor.id, "moderation", f"You were banned from {n.name}" + (f" for {hours}h" if hours else " indefinitely")
+           + f". Reason: {reason[:200]}. You can appeal from the Network page.", f"#/n/{n.slug}")
+    audit(db, actor.id, n.id, "network.ban", f"user:{target.id}", f"hours:{hours or 'indefinite'}; {reason[:200]}", ip)
+    return b
+
+
+class BanIn(BaseModel):
+    username: str = Field(min_length=3, max_length=20)
+    hours: int | None = Field(default=None, ge=1, le=24 * 365)
+    reason: str = Field(min_length=3, max_length=300)
+
+
+class AppealIn(BaseModel):
+    text: str = Field(min_length=10, max_length=1000)
+
+
+@router.post("/api/networks/{slug}/bans", dependencies=[rate_limit("ban", 30, 3600)])
+def ban_user(slug: str, data: BanIn, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    n = get_network(db, slug)
+    b = do_network_ban(db, n, user, get_user_by_name(db, data.username), data.hours, clean(data.reason, 300), ip_of(request))
+    commit(db)
+    return ban_out(db, b)
+
+
+@router.get("/api/networks/{slug}/bans")
+def list_bans(slug: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    n = get_network(db, slug)
+    if not can(membership(db, n.id, user.id), "perm_moderate"): raise HTTPException(403, "Moderators only.")
+    return [ban_out(db, b) for b in db.scalars(select(NetworkBan).where(NetworkBan.network_id == n.id).order_by(desc(NetworkBan.id)).limit(200))]
+
+
+@router.get("/api/networks/{slug}/my-ban")
+def my_ban(slug: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    n = get_network(db, slug)
+    b = active_network_ban(db, n.id, user.id)
+    return ban_out(db, b, admin_view=False) if b else None
+
+
+@router.post("/api/networks/{slug}/bans/appeal", dependencies=[rate_limit("appeal", 3, 86400)])
+def appeal(slug: str, data: AppealIn, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    n = get_network(db, slug)
+    b = active_network_ban(db, n.id, user.id)
+    if not b: raise HTTPException(404, "You aren't banned from this Network.")
+    if b.appeal: raise HTTPException(409, "You've already appealed this ban.")
+    b.appeal, b.appealed_at = clean(data.text, 1000), utcnow()
+    for uid in db.scalars(select(Membership.user_id).where(Membership.network_id == n.id, Membership.status == "active", Membership.role.in_(["founder", "admin"]))):
+        if can(membership(db, n.id, uid), "perm_moderate"):
+            notify(db, uid, user.id, "moderation", f"@{user.username} appealed their ban from {n.name}", f"#/n/{n.slug}/moderation")
+    audit(db, user.id, n.id, "network.ban_appeal", f"ban:{b.id}", "", ip_of(request))
+    commit(db)
+    return {"ok": True}
+
+
+@router.delete("/api/networks/{slug}/bans/{username}")
+def unban(slug: str, username: str, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    n = get_network(db, slug)
+    target = get_user_by_name(db, username)
+    if not can(membership(db, n.id, user.id), "perm_moderate"): raise HTTPException(403, "Moderators only.")
+    b = active_network_ban(db, n.id, target.id)
+    if not b: raise HTTPException(404, "No active ban.")
+    b.lifted_at, b.lifted_by = utcnow(), user.id
+    tm = membership(db, n.id, target.id)
+    if tm and tm.status == "removed":
+        tm.status = "active" if b.prev_status == "active" else "left"
+        if tm.status == "active": tm.joined_at, tm.left_at = utcnow(), None
+    notify(db, target.id, user.id, "moderation", f"Your ban from {n.name} was lifted.", f"#/n/{n.slug}")
+    audit(db, user.id, n.id, "network.unban", f"user:{target.id}", f"ban:{b.id}", ip_of(request))
+    commit(db)
+    return {"ok": True, "membership": tm.status if tm else None}

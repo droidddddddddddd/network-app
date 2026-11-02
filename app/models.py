@@ -497,3 +497,61 @@ class CtoBacking(Base):
     first_seen: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     first_funder: Mapped[str] = mapped_column(String(64), default="")
     created_at: Mapped[datetime] = TS()
+
+
+class NetworkBan(Base):
+    """A ban scoped to ONE Network, set by its Founder or an Admin with moderation permission. Not platform-wide."""
+    __tablename__ = "network_bans"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    network_id: Mapped[int] = FK("networks.id", index=True)
+    user_id: Mapped[int] = FK("users.id", index=True)
+    banned_by: Mapped[int] = FK("users.id")
+    reason: Mapped[str] = mapped_column(String(300), default="")
+    until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # None = indefinite
+    prev_status: Mapped[str] = mapped_column(String(10), default="")
+    appeal: Mapped[str] = mapped_column(String(1000), default="")
+    appealed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    lifted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    lifted_by: Mapped[int | None] = FK("users.id", nullable=True)
+    created_at: Mapped[datetime] = TS()
+
+
+class LinkedAccount(Base):
+    """An X or Google account linked by OAuth. Proves control of that account only, not government identity.
+    Stores the provider's subject id and public handle/email; provider access tokens are never stored."""
+    __tablename__ = "linked_accounts"
+    __table_args__ = (UniqueConstraint("provider", "subject"), UniqueConstraint("user_id", "provider"))
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = FK("users.id", index=True)
+    provider: Mapped[str] = mapped_column(String(10))  # x | google
+    subject: Mapped[str] = mapped_column(String(100))
+    handle: Mapped[str] = mapped_column(String(100), default="")  # X @handle
+    email: Mapped[str] = mapped_column(String(254), default="")  # Google email (private unless show_email)
+    email_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    show_email: Mapped[bool] = mapped_column(Boolean, default=False)
+    account_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # X only
+    followers: Mapped[int | None] = mapped_column(Integer, nullable=True)  # X only, refreshed on each sign-in
+    refreshed_at: Mapped[datetime] = TS()
+    created_at: Mapped[datetime] = TS()
+
+
+class OAuthState(Base):
+    """Short-lived OAuth state: PKCE verifier + OIDC nonce, single use, bound to a browser cookie."""
+    __tablename__ = "oauth_states"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    state: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    browser: Mapped[str] = mapped_column(String(64))  # sha256 of the binding cookie
+    provider: Mapped[str] = mapped_column(String(10))
+    mode: Mapped[str] = mapped_column(String(10))  # login | link
+    user_id: Mapped[int | None] = FK("users.id", nullable=True)
+    verifier: Mapped[str] = mapped_column(String(128))
+    nonce: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = TS()
+
+
+class ChainCache(Base):
+    """Persistent cache for immutable on-chain facts (e.g. a token's creator), shared by all instances."""
+    __tablename__ = "chain_cache"
+    key: Mapped[str] = mapped_column(String(160), primary_key=True)
+    value: Mapped[str] = mapped_column(Text)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

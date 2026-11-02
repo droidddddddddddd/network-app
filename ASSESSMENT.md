@@ -39,3 +39,13 @@ The old `network.db` was not migrated (demo data only) and is excluded from the 
 | Dev abandonment evidence | **Partial:** shows "holds none now"; cannot prove *sold* vs transferred |
 | Suspensions | Platform admins only; Network moderators can hide/remove but not suspend |
 | Realtime | Single instance only (in-process hub); scaling out needs Redis pub/sub |
+
+## Status at v0.2.0-beta (2026-11-02)
+| Area | Status |
+|---|---|
+| Identity | Replaced by **account linking** (X OAuth 2.0 PKCE, Google OIDC). Labelled account ownership, not government ID. Tested with mocked providers only; **real X/Google sign-in is untested** until the owner registers apps |
+| Earliest-tx / creator lookup | Done with Helius (oldest-first, one request; live-checked on $ANAKIN → pump create `creator` argument). Without Helius, busy mints still return "couldn't determine" after `CHAIN_MAX_SIG_PAGES` pages. The pump.fun curve field usually answers first anyway |
+| Dev abandonment evidence | Done: sold (DEX venue) vs transferred (destination) vs burned/unclassified, from the latest `CHAIN_MAX_FLOW_TXS` token txs. Live-checked: $ANAKIN creator sold its full buy via PumpSwap. Venues are classified by program id; an unknown aggregator route can show as "transferred" or "unclassified", never as a false sale |
+| Suspensions / bans | Platform suspensions (admins) plus **Network-scoped bans** with appeal and lift |
+| Realtime | In-process by default; optional Postgres LISTEN/NOTIFY backend (tested with two local processes, not on Render). NOTIFY payloads over ~7.9 KB fall back to local-only delivery |
+| Live tests on public RPC | `getTokenLargestAccounts` is often rate-limited (429) on the free public RPC; the app shows it as unavailable. Passes with Helius |
