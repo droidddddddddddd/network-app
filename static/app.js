@@ -817,7 +817,9 @@ on(/^\/settings$/, c => {
   <div class="err"></div><button class="btn primary" type="submit">Save</button> <a class="btn ghost" href="#/welcome">Change role & interests</a></form></div>
   <div class="card" id="linked"><h2 style="margin-top:0">Linked accounts & login</h2><p class="tiny muted">Linking proves you own an X or Google account (account ownership, not a government ID). NETWORK stores only the account id, handle or email and the verified flag, never your tokens, and never asks for seed phrases or private keys.</p><div id="lal">Loading…</div>
   <h3>Password</h3><form id="pwf">${m.has_password ? '<label class="f"><span>Current password</span><input class="in" type="password" name="current" required maxlength="128" autocomplete="current-password"></label>' : '<p class="tiny muted">You sign in with a linked account. Set a password to also log in with your username.</p>'}
-  <label class="f"><span>New password</span><input class="in" type="password" name="password" required minlength="8" maxlength="128" autocomplete="new-password"></label><div class="err"></div><button class="btn sm" type="submit">${m.has_password ? 'Change password' : 'Set password'}</button></form></div>`;
+  <label class="f"><span>New password</span><input class="in" type="password" name="password" required minlength="8" maxlength="128" autocomplete="new-password"></label><div class="err"></div><button class="btn sm" type="submit">${m.has_password ? 'Change password' : 'Set password'}</button></form></div>
+  <div class="card" id="delacct"><h2 style="margin-top:0">Delete account</h2><p class="tiny muted">Permanently deletes your Passport, posts, messages, memberships, opportunities and any Network you founded where you are the only member. This can't be undone. If a Network you founded still has other members, remove them first.</p>
+  <form id="daf"><label class="f"><span>Type your username (${esc(m.username)}) to confirm</span><input class="in" name="confirm" required maxlength="40" autocomplete="off"></label>${m.has_password ? '<label class="f"><span>Password</span><input class="in" type="password" name="password" required maxlength="128" autocomplete="current-password"></label>' : ''}<div class="err"></div><button class="btn danger sm" type="submit">Delete my account</button></form></div>`;
   const f = $('#sf'); bindUploads(f);
   oauthProviders().then(pv => {
     const la = m.linked_accounts || [], has = p => la.find(a => a.provider === p);
@@ -831,6 +833,8 @@ on(/^\/settings$/, c => {
       try { await api('/auth/oauth/' + b.dataset.unlink, { method: 'DELETE' }); S.me = await api('/me'); toast('Unlinked'); route(); } catch (e) { fail(e); } });
     $('#lal').querySelector('[data-showemail]')?.addEventListener('change', async ev => { try { await api('/auth/oauth/google/visibility', { method: 'PUT', body: { show_email: ev.target.checked } }); S.me = await api('/me'); toast('Saved'); } catch (e) { fail(e); } });
   });
+  const df = $('#daf'); df.addEventListener('submit', e => { e.preventDefault(); if (!confirm('Delete your NETWORK account permanently?')) return; submitForm(df, async () => {
+    await api('/me', { method: 'DELETE', body: { confirm: df.elements.confirm.value, password: df.elements.password ? df.elements.password.value : '' } }); S.me = null; toast('Account deleted'); location.hash = '#/'; shell(); route(); }); });
   const pf = $('#pwf'); pf.addEventListener('submit', e => { e.preventDefault(); submitForm(pf, async () => {
     await api('/me/password', { body: { current: pf.elements.current ? pf.elements.current.value : '', password: pf.elements.password.value } }); S.me = await api('/me'); toast('Password saved'); route(); }); });
   f.addEventListener('submit', e => { e.preventDefault(); submitForm(f, async () => {

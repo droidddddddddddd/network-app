@@ -14,3 +14,10 @@ def test_render_yaml_shape():
     assert "fromDatabase" in env["DATABASE_URL"] and env["PYTHON_VERSION"]["value"].count(".") == 2
     for k in ("ADMIN_USERNAMES", "HELIUS_API_KEY", "S3_SECRET_ACCESS_KEY"):
         assert env[k]["sync"] is False and "value" not in env[k]
+
+def test_no_api_schema_or_docs_in_production(tmp_path):
+    code = ("from fastapi.testclient import TestClient; from app.main import app; c=TestClient(app);"
+            "assert c.get('/openapi.json').status_code==404 and c.get('/api/docs').status_code==404; print('ok')")
+    env = {**os.environ, "ENV": "production", "JWT_SECRET": "x" * 48, "DATABASE_URL": f"sqlite:///{tmp_path}/p.db", "DISABLE_TRACKER": "1"}
+    r = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, cwd=os.path.dirname(os.path.dirname(__file__)))
+    assert r.returncode == 0 and "ok" in r.stdout, r.stderr[-500:]

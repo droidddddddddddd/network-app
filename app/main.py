@@ -55,7 +55,8 @@ async def cto_loop():
         await asyncio.sleep(every)
 
 
-app = FastAPI(title="NETWORK", version="1.0.0", lifespan=lifespan, docs_url=None if PROD else "/api/docs", redoc_url=None)
+app = FastAPI(title="NETWORK", version="1.0.0", lifespan=lifespan, docs_url=None if PROD else "/api/docs", redoc_url=None,
+              openapi_url=None if PROD else "/openapi.json")  # no schema dump in production
 # CORS: same-origin by default. Only origins listed in CORS_ORIGINS (comma separated) may call the API cross-site.
 _origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "").split(",") if o.strip()]
 if _origins:
@@ -1427,8 +1428,9 @@ async def ws(websocket: WebSocket):
 
 
 # ================================================================= TRUST: moderation, verification, CTO, activity
-from . import trust, oauth  # noqa: E402  (router modules import helpers from this module)
+from . import trust, oauth, account  # noqa: E402  (router modules import helpers from this module)
 app.include_router(trust.router)
+app.include_router(account.router)
 app.include_router(oauth.router)
 
 
