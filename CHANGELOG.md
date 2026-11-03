@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.2.1-beta (2026-11-02)
+Fixes from the live audit of the Render deployment:
+- **Account deletion:** `DELETE /api/me` with a Settings "Delete account" card. You must type your username and enter your password. It removes the user's data. A founded Network is deleted only when you are its sole member; otherwise the request returns 409.
+- **Production no longer serves `/openapi.json`.** Docs were already disabled.
+- **Mobile layout:** Network cards and file inputs no longer cause horizontal scrolling on Discover, Networks and Settings.
+
 ## v0.2.0-beta (2026-11-02)
 - **Sign in with X (OAuth 2.0 PKCE) and Google (OpenID Connect):** sign up, log in, or link to an existing Passport.
   - Badges "X account verified (@handle)" and "Google account verified" are labelled account ownership, not government ID.
