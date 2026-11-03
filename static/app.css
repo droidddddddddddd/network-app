@@ -166,3 +166,11 @@ textarea.in{resize:vertical;min-height:90px}
   .chat{height:calc(100vh - 330px)}
   .cover{height:120px}
 }
+
+/* ---------- PWA ---------- */
+body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-right)}
+.top{padding-top:max(12px,env(safe-area-inset-top))}.side{padding-top:max(18px,env(safe-area-inset-top))}
+.pwa-banner{position:fixed;left:12px;right:12px;bottom:calc(12px + env(safe-area-inset-bottom));z-index:60;display:flex;align-items:center;gap:12px;background:var(--panel2);border:1px solid var(--green2);border-radius:var(--r);padding:10px 12px;box-shadow:0 10px 30px rgba(0,0,0,.5);max-width:520px;margin:0 auto}
+.pwa-banner img{border-radius:10px;flex:none}.pwa-banner .grow{flex:1;min-width:0}
+@media (max-width:860px){.pwa-banner{bottom:calc(72px + env(safe-area-inset-bottom))}}
+@media (display-mode:standalone){.pwa-banner{display:none}}

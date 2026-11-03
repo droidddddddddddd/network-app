@@ -81,7 +81,8 @@ async def security(request: Request, call_next):
     resp.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     resp.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
     resp.headers["Content-Security-Policy"] = ("default-src 'self'; img-src 'self' https: data: blob:; style-src 'self' 'unsafe-inline'; "
-                                               "script-src 'self'; connect-src 'self' ws: wss:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
+                                               "script-src 'self'; connect-src 'self' ws: wss:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; "
+                                               "manifest-src 'self'; worker-src 'self'")
     if PROD:
         resp.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     return resp
@@ -1442,3 +1443,38 @@ app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
 @app.get("/")
 def index():
     return FileResponse(STATIC / "index.html")
+
+
+# ================================================================= PWA
+import hashlib  # noqa: E402
+from fastapi.responses import Response  # noqa: E402
+
+
+def _build_id() -> str:
+    h = hashlib.sha256()
+    for p in sorted(STATIC.rglob("*")):
+        if p.is_file() and p.name != "sw.js":
+            h.update(str(p.relative_to(STATIC)).encode()); h.update(p.read_bytes())
+    h.update((STATIC / "sw.js").read_bytes())
+    return h.hexdigest()[:12]
+
+
+SW_BUILD = _build_id()
+_SW_SRC = (STATIC / "sw.js").read_text().replace("__BUILD__", SW_BUILD)
+
+
+@app.get("/sw.js", include_in_schema=False)
+def service_worker():
+    return Response(_SW_SRC, media_type="application/javascript", headers={
+        "Cache-Control": "no-cache, no-store, must-revalidate", "Service-Worker-Allowed": "/"})
+
+
+@app.get("/manifest.webmanifest", include_in_schema=False)
+def manifest():
+    return FileResponse(STATIC / "manifest.webmanifest", media_type="application/manifest+json",
+                        headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    return FileResponse(STATIC / "icons" / "favicon.ico", media_type="image/x-icon")

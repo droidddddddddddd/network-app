@@ -4,6 +4,12 @@ Social and business networking for crypto/Solana people: Networks (Personal, Tra
 
 **Stack:** FastAPI · SQLAlchemy 2 · Alembic · SQLite locally, PostgreSQL (psycopg 3) in production · bcrypt + PyJWT (httpOnly cookie) · vanilla JS SPA (no build step) · in-process WebSocket hub · DexScreener public API (free, keyless).
 
+## Install on your phone (PWA)
+NETWORK installs like an app, with its own home-screen icon and a full-screen window. Open the live site over HTTPS first.
+- **iPhone / iPad (Safari):** open the site in Safari, tap the **Share** button (square with an arrow), scroll down, tap **Add to Home Screen**, then tap **Add**. Other iOS browsers may not offer this, so use Safari.
+- **Android (Chrome):** open the site. Tap **Install** on the "Install NETWORK" banner, or go to Settings → Install app. You can also use Chrome's ⋮ menu → **Install app** / **Add to Home screen**.
+- Updates install automatically: after a deploy, the app picks up the new version the next time it is opened. Offline, the app shows an "You're offline" page. Your data is never stored in the offline cache.
+
 ## Local development
 ```bash
 python3 -m venv .venv && . .venv/bin/activate

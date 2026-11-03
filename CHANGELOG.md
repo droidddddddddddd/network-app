@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.3.0-beta (2026-11-02)
+NETWORK can now be installed on phones as a Progressive Web App (PWA).
+- **Web app manifest** at `/manifest.webmanifest`, served as `application/manifest+json`. It sets the name and short name NETWORK, the slogan, `start_url`/`scope` `/`, standalone display, and the dark `#07090a` background and theme colour.
+- **Icons** made from the official neon-green NETWORK "N" mark on the dark background: 192, 512, maskable 512 with safe padding, the 180 apple-touch-icon, and the favicon (`/favicon.ico` plus a 32px PNG). They are in `static/icons/`.
+- **Service worker** at `/sw.js` with root scope. It is served with `Cache-Control: no-store` and `Service-Worker-Allowed: /`.
+  - It caches the app shell and static assets. The cache name includes a hash of `static/`, so every deploy creates a new cache and old caches are deleted on activate.
+  - Page navigations always go to the network first. When offline, they fall back to a branded offline page.
+  - `/api/*`, `/ws`, `/uploads/*` and anything authenticated are never cached.
+  - `skipWaiting` and `clients.claim` are used with a single reload, so a new deploy takes effect on the next visit.
+- **Install affordance:**
+  - Android/Chrome shows an Install button in a small dismissible banner and an "Install app" card in Settings, only after the browser fires `beforeinstallprompt`.
+  - iOS Safari shows "Tap the Share button, then Add to Home Screen" instead.
+  - Both are hidden when the app is already running standalone.
+- iOS meta tags were added: apple-mobile-web-app-capable, status-bar-style and title. Safe-area padding was added for the iPhone notch in standalone mode.
+- CSP adds `manifest-src 'self'; worker-src 'self'`. Everything else is unchanged.
+
 ## v0.2.1-beta (2026-11-02)
 Fixes from the live audit of the Render deployment:
 - **Account deletion:** `DELETE /api/me` with a Settings "Delete account" card. You must type your username and enter your password. It removes the user's data. A founded Network is deleted only when you are its sole member; otherwise the request returns 409.
