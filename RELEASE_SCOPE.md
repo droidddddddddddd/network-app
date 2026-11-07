@@ -27,7 +27,7 @@ The public interface offers X only. Existing Google-linked records and legacy pa
 
 ## Chrome companion status
 
-The experimental extension renders its own public-feed popup/side panel and adds a floating launcher on X. It never frames the site; full NETWORK functionality and X sign-in open in a normal tab. This is a companion panel, not yet a contextual card overlay attached to each X post. Contextual post cards and authenticated extension sessions are not implemented. Configure exact extension IDs in `EXTENSION_ORIGINS`; see extension/README.md for tests and limitations.
+The beta extension renders native popup/side-panel UI, not a framed website. It supports X sign-in with an extension-specific PKCE handoff, one-hour revocable sessions, permission-filtered feeds, post/like/reply actions and opt-in inline public NETWORK context cards on X. Context uses extracted public references and existing NETWORK records, never private feeds. Configure exact extension IDs in `EXTENSION_ORIGINS`; see extension/README.md for the protocol, privacy, packaging and tests. Production OAuth/Store deployment remains a separate release gate.
 
 ## Production release gates
 

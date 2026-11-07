@@ -13,3 +13,6 @@ _reference/*
 .env.*
 !.env.example
 screenshots/*.tmp
+
+# Reproducible local build artifacts
+dist/

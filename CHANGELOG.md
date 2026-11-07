@@ -1,6 +1,13 @@
 # Changelog
 
-## v0.4.0-beta (2026-11-07)
+## v0.4.0-beta — companion completion (2026-11-07)
+- Added browser-bound X OAuth → one-time extension PKCE code exchange, hashed/revocable one-hour origin-bound sessions, trusted-memory Chrome session storage and companion logout. No provider secrets or reusable tokens in extension URLs/logs.
+- Added authenticated permission-filtered feeds, joined-Network audiences, publishing, likes and replies via existing web permission handlers. Extension bearer credentials are rejected by the web API; website cookies do not authorize companion actions.
+- Expanded exact-ID CORS to extension routes with explicit bearer/CSRF headers, GET/POST only and no cookies. Added auth query access-log redaction and Alembic migration `9c2e4a701b36`.
+- Added opt-in public contextual cards on X, safe DOM rendering, throttled mutation handling, current/public and legacy article adapters, and a bounded cache. Private data never enters X cards; references are not verified contracts or executed trades.
+- Added deterministic Store ZIP build, official node-N icon sizes, privacy policy route/page, listing/disclosure drafts and local mock-provider browser/security tests. No Store submission or production deployment is implied.
+
+## v0.4.0-beta initial review (2026-11-07)
 - Public sign-in is X only (OAuth 2.0 + PKCE). Password accounts can recover via the unlinked `#/legacy-login` route, then link X. Google buttons removed; legacy Google records are kept.
 - Wallet signing, wallet verification and CTO holder backing are switched off (`ENABLE_WALLET_FEATURES=0`; those APIs return 404). Read-only token and creator research stays.
 - Wallet address field and its privacy toggle removed from profile settings.

@@ -1,10 +1,12 @@
 {
   "manifest_version": 3,
   "name": "NETWORK \u2014 X Companion",
-  "version": "0.2.0",
-  "description": "Read the public NETWORK feed alongside X; sign in securely in a normal NETWORK tab.",
+  "version": "0.3.0",
+  "description": "Your NETWORK feed, posts and public crypto context alongside X. Secure X sign-in; no wallet access.",
   "permissions": [
-    "sidePanel"
+    "sidePanel",
+    "storage",
+    "identity"
   ],
   "host_permissions": [
     "https://network-app-65f6.onrender.com/*"
@@ -16,8 +18,9 @@
     "default_title": "Open NETWORK companion",
     "default_popup": "sidepanel.html",
     "default_icon": {
+      "16": "icons/icon-16.png",
       "32": "icons/favicon-32.png",
-      "192": "icons/icon-192.png"
+      "48": "icons/icon-48.png"
     }
   },
   "side_panel": {
@@ -30,14 +33,17 @@
         "https://twitter.com/*"
       ],
       "js": [
+        "config.js",
         "content.js"
       ],
       "run_at": "document_idle"
     }
   ],
   "icons": {
+    "16": "icons/icon-16.png",
     "32": "icons/favicon-32.png",
-    "192": "icons/icon-192.png"
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
   },
   "content_security_policy": {
     "extension_pages": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src https://network-app-65f6.onrender.com; object-src 'none'; base-uri 'none'; frame-src 'none'"
@@ -52,5 +58,6 @@
         "https://twitter.com/*"
       ]
     }
-  ]
+  ],
+  "minimum_chrome_version": "116"
 }

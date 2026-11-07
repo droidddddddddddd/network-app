@@ -1,4 +1,4 @@
-"""Narrow, credential-free CORS for the companion's public feed, never site framing."""
+"""Exact-ID, cookie-free CORS for scoped companion APIs, never site framing."""
 import os
 import re
 from starlette.middleware.cors import CORSMiddleware
@@ -15,10 +15,10 @@ class ExtensionCORSMiddleware:
     def __init__(self, app):
         self.app = app
         self.cors = CORSMiddleware(app, allow_origins=extension_origins(),
-                                   allow_methods=["GET"], allow_credentials=False)
+                                   allow_methods=["GET", "POST"], allow_headers=["authorization", "content-type", "x-csrf", "x-network-extension"], allow_credentials=False)
 
     async def __call__(self, scope, receive, send):
-        target = self.cors if scope["type"] == "http" and scope["path"] == "/api/extension/feed" else self.app
+        target = self.cors if scope["type"] == "http" and scope["path"].startswith("/api/extension/") else self.app
         await target(scope, receive, send)
 
 
@@ -29,5 +29,5 @@ class WebCORSMiddleware:
         self.cors = CORSMiddleware(app, **kwargs)
 
     async def __call__(self, scope, receive, send):
-        target = self.app if scope["type"] == "http" and scope["path"] == "/api/extension/feed" else self.cors
+        target = self.app if scope["type"] == "http" and scope["path"].startswith("/api/extension/") else self.cors
         await target(scope, receive, send)

@@ -1,28 +1,47 @@
-# NETWORK X Companion (experimental)
+# NETWORK X Companion — beta
 
-Load `extension/` unpacked in a recent Chrome browser. The toolbar popup and side panel are packaged HTML/JS, **not an iframe**. They read the anonymous public NETWORK feed. An X/Twitter launcher opens the panel; **Open NETWORK / Sign in with X** opens the full site in a regular tab.
+## Install and configure
 
-## Setup
+1. Use Chrome 116+; enable Developer mode at `chrome://extensions` and Load unpacked `extension/`.
+2. Configure Render `EXTENSION_ORIGINS=chrome-extension://<actual-32-letter-id>` and restart. Multiple exact IDs are comma-separated; no wildcards. Use the stable Store ID for distribution, not an ephemeral test/unpacked ID. Keep web `CORS_ORIGINS` separate.
+3. Retain `PUBLIC_BASE_URL`, `X_CLIENT_ID`, `X_CLIENT_SECRET`, `JWT_SECRET` and persistent PostgreSQL `DATABASE_URL`. The X developer callback remains `https://<domain>/api/auth/oauth/x/callback`. The server—not X—redirects the final one-time code to the extension's canonical chromiumapp.org URL. No additional provider secret goes in the extension.
+4. Keep `ENABLE_WALLET_FEATURES=0`. Run migrations from the repository root, including `9c2e4a701b36`.
+5. Open the toolbar popup or X launcher. Sign in with X; choose a feed/audience, publish a post, like or reply. Log out when finished. Opt in to public context separately.
 
-1. Enable Developer mode at `chrome://extensions`, select **Load unpacked**, choose this directory.
-2. Copy the extension ID (32 letters a–p). Configure Render `EXTENSION_ORIGINS=chrome-extension://<id>`, then restart. Multiple IDs are comma-separated; no wildcards. Unpacked IDs may differ between machines/paths; a store-published ID is stable.
-3. Keep `ENABLE_WALLET_FEATURES=0`. Keep all OAuth credentials on the server.
-4. Open the toolbar popup, use Refresh, or click the NETWORK launcher on X. Existing X tabs may need a reload after installation.
+## Auth and permission boundaries
 
-The public feed is credential-free, GET-only, no-store and always anonymous even if a caller supplies a session cookie. It excludes private Networks and hidden/removed posts. Chrome's host permission can allow privileged requests independent of server CORS: the public endpoint is not an access-controlled data source. CORS is not auth. No cookies/token/session handoff is implemented. No scraping, posting to X or wallet access.
+The user explicitly starts a top-level Chrome identity authorization window, never an iframe. NETWORK uses the existing X OAuth PKCE/browser-bound state flow. A second extension-generated PKCE verifier binds a single-use, 60-second code to its initiator. The registered ID fixes the chromiumapp.org redirect; arbitrary redirect URIs are not accepted. A conditional DB update atomically consumes the code. No reusable token appears in a URL.
 
-The site remains protected by `X-Frame-Options: DENY` and `frame-ancestors 'none'`. The extension CSP disallows frames and remote scripts. Feed text uses `textContent` to prevent markup execution. It requests only `sidePanel` plus the NETWORK host permission; X content-script matches only add a button. The logo is copied verbatim from the official node-N asset.
+A one-hour opaque bearer session is hashed in the DB and bound to the registered extension ID. It is accepted only on extension endpoints with the matching extension ID, never on the web API. Origin, when supplied, must match that registered ID. Chrome host-permitted worker fetch can omit Origin; those requests require `x-network-extension` plus the scoped bearer credential. The header is a CSRF/CORS boundary, not authentication by itself. Site cookies do not authenticate extension requests. GET/POST CORS permits only exact configured extension origins, required headers and no credentials/cookies. POSTs require `x-csrf: 1`; the worker always uses `credentials: omit`.
 
-## Local browser validation
+The worker stores credentials only in `chrome.storage.session` with `TRUSTED_CONTEXTS`; this is not true httpOnly storage. Packaged trusted extension code can access it; X/content scripts cannot. Runtime message handlers only allow member operations from the packaged panel URL. Content scripts get public context and the launcher only. Browser restart clears storage; sessions expire after one hour. Logout revokes the current token and clears local state. Offline logout warns if server revocation cannot be confirmed. It does not end the separate website session. No refresh token is used.
 
-Install dev dependencies and Playwright, with bundled Chromium available:
+Member actions reuse web handlers: network membership/privacy, blocks, scoped bans, suspension and post/reply permissions remain enforced server-side. API responses are no-store. Application auth query strings are redacted from uvicorn access logs; infrastructure logging outside the app must also be reviewed by the operator.
+
+## Contextual cards
+
+Context is off by default. When enabled, a throttled/viewport-bounded MutationObserver scans X post article adapters, including legacy test-id and newer public SSR markup. Only the author handle, first cashtag and first Solana-like address are sent. No full tweet text, images, X cookies or private messages are sent. A bounded worker cache limits repeated lookups. Cards use textContent and public linked profiles/published call records; no private NETWORK data is inserted into X. Cashtags may identify multiple tokens; an address mention is not proof of a token. No match is not a safety claim. X layout changes remain a compatibility risk.
+
+## Build for the Chrome Web Store
 
 ```bash
-pip install -r requirements.txt -r requirements-dev.txt playwright
-playwright install chromium
-python tests/extension_browser_check.py --shots /workspace/network-new/shots
+python scripts/build_extension.py --output dist/network-x-companion.zip
 ```
 
-The script starts an isolated, migrated local server and test database, copies the extension to a temporary directory and changes only its public base URL/host permission/CSP for localhost. It launches real headless Chromium with `--load-extension`, loads the actual extension-owned page, checks successful API data rendering, privacy filtering, empty/error/retry states, safe text rendering, normal-tab links and the X launcher on a mocked X document, including trusted clicks on both the popup button and X launcher whose native `sidePanel.open` requests resolve. Screenshots are `ext-*.png`. No production credentials or real X session is used. It also verifies exact-ID CORS and unchanged site anti-framing headers against the server.
+The ZIP has manifest.json at its root, only allowlisted runtime assets and official node-N icons at 16/32/48/128. It excludes mock provider/test/probe code, local config, credentials and documentation drafts. Build validates the public production host and permission set; it does not submit or publish anything. See STORE_LISTING.md for listing text, permission explanations, data-use disclosures and remaining manual review. Publish the `/extension-privacy` policy route before submitting its URL to the Store. Have the operator approve listing/disclosure text and product screenshots; do not submit private member data or test screenshots as real product claims.
 
-Not yet verified: real provider X login, live X DOM/launcher interaction, interactive native side-panel/browser toolbar chrome, Chrome Web Store install/review, and authenticated extension sessions (not implemented). The headless check renders the packaged popup/side-panel document in an extension tab, not a screenshot of Chrome's native panel chrome.
+## Repeatable checks
+
+```bash
+pytest -q
+python scripts/check_rules.py
+pip install playwright
+playwright install chromium
+python tests/extension2_browser_check.py --shots /workspace/network-new/shots
+# Skip the best-effort unsigned live X compatibility read:
+python tests/extension2_browser_check.py --shots /workspace/network-new/shots --skip-real-x
+```
+
+The browser check copies the packaged extension to a temporary directory, changes only local public endpoint/host/CSP, and adds a test-only isolated-world security probe. A migrated isolated DB and local X OAuth transport mock are used. It invokes the real Chrome identity API and tests code exchange, session storage, private-allowed feeds, posting, like, reply, context opt-in, DOM mutation, content-script denial and logout revocation. No production credentials or authenticated X browser profile are used. Screenshots use `ext2-*.png`. The optional public `x.com/solana` attempt is read-only; structural fixture tests remain deterministic.
+
+The old `tests/extension_browser_check.py` runner delegates to this check. Native popup/panel document rendering is checked in an extension tab; native browser chrome is not visually certified. Production X consent, Store installation/review and live Render/PostgreSQL remain separate release gates. Never call the project “100% verified” based only on local mocks.

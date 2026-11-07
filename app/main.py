@@ -1,4 +1,5 @@
 import os, re, uuid, asyncio
+from . import log_safety  # strip auth query strings from access logs
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from pathlib import Path
@@ -80,9 +81,12 @@ async def security(request: Request, call_next):
         resp = JSONResponse({"detail": "CSRF check failed."}, status_code=403)
     else:
         resp = await call_next(request)
+    if request.url.path.startswith("/api/extension/"):
+        resp.headers["Cache-Control"] = "no-store"
+        resp.headers["Referrer-Policy"] = "no-referrer"
     resp.headers["X-Content-Type-Options"] = "nosniff"
     resp.headers["X-Frame-Options"] = "DENY"
-    resp.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    resp.headers.setdefault("Referrer-Policy", "no-referrer" if request.url.path.startswith("/api/extension/") else "strict-origin-when-cross-origin")
     resp.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
     resp.headers["Content-Security-Policy"] = ("default-src 'self'; img-src 'self' https: data: blob:; style-src 'self' 'unsafe-inline'; "
                                                "script-src 'self'; connect-src 'self' ws: wss:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; "
@@ -334,6 +338,11 @@ def endorse(username: str, data: EndorseIn, user: User = Depends(current_user), 
 
 
 # ================================================================= POSTS & FEEDS
+@app.get("/extension-privacy", include_in_schema=False)
+def extension_privacy():
+    return FileResponse(STATIC / "extension-privacy.html", media_type="text/html")
+
+
 @app.get("/api/feed")
 def feed(tab: str = "network", before: int | None = None, viewer: User | None = Depends(optional_user), db: Session = Depends(get_db)):
     vid = viewer.id if viewer else 0
@@ -353,18 +362,6 @@ def feed(tab: str = "network", before: int | None = None, viewer: User | None = 
         stmt = stmt.where(or_(Post.tags.like(f"% {t} %"), Post.tags.like(f"{t} %"), Post.tags.like(f"% {t}"), Post.tags == t))
     if before: stmt = stmt.where(Post.id < before)
     return posts_out(db, list(db.scalars(stmt.order_by(desc(Post.id)).limit(30))), vid)
-
-
-@app.get("/api/extension/feed")
-def extension_feed(response: Response, db: Session = Depends(get_db)):
-    """Anonymous public feed only, even if a caller supplies a site session cookie."""
-    visible, *_ = visible_filter(db, 0)
-    posts = db.scalars(select(Post).where(visible, Post.parent_id.is_(None))
-                       .order_by(desc(Post.id)).limit(12))
-    response.headers["Cache-Control"] = "no-store"
-    return {"posts": [{"id": p.id, "body": p.body, "created_at": iso(p.created_at),
-                       "author": db.get(User, p.author_id).username, "is_demo": p.is_demo}
-                      for p in posts], "scope": "public", "read_only": True}
 
 
 @app.post("/api/posts", dependencies=[rate_limit("post", 20, 60, new_limit=5), rate_limit("post_day", 300, 86400, new_limit=30)])
@@ -1443,6 +1440,9 @@ from . import trust, oauth, account  # noqa: E402  (router modules import helper
 app.include_router(trust.router)
 app.include_router(account.router)
 app.include_router(oauth.router)
+from . import extension_auth, extension_api
+app.include_router(extension_auth.router)
+app.include_router(extension_api.router)
 
 
 # ================================================================= STATIC SPA

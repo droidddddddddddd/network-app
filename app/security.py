@@ -80,6 +80,11 @@ def rate_limit(name: str, limit: int, window: int, new_limit: int | None = None)
         from .models import RateHit
         ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "?").split(",")[0].strip()
         uid = read_token(token_from_request(request))
+        if request.url.path.startswith("/api/extension/") and request.headers.get("authorization"):
+            from .extension_auth import optional_extension_user
+            with SessionLocal() as session:
+                extension_member = optional_extension_user(request, session)
+                uid = extension_member.id if extension_member else None
         key = f"{name}:{uid}" if uid else f"{name}:ip:{ip}"
         t = time.time()
         with SessionLocal() as db:

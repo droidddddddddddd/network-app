@@ -546,6 +546,7 @@ class OAuthState(Base):
     user_id: Mapped[int | None] = FK("users.id", nullable=True)
     verifier: Mapped[str] = mapped_column(String(128))
     nonce: Mapped[str] = mapped_column(String(64), default="")
+    extension_request: Mapped[str] = mapped_column(String(64), default="")
     created_at: Mapped[datetime] = TS()
 
 
@@ -555,3 +556,28 @@ class ChainCache(Base):
     key: Mapped[str] = mapped_column(String(160), primary_key=True)
     value: Mapped[str] = mapped_column(Text)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ExtensionAuthRequest(Base):
+    """Browser-bound PKCE handoff; only hashes of one-time authorization codes are stored."""
+    __tablename__ = "extension_auth_requests"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    extension_id: Mapped[str] = mapped_column(String(32))
+    challenge: Mapped[str] = mapped_column(String(43))
+    state: Mapped[str] = mapped_column(String(128))
+    browser: Mapped[str] = mapped_column(String(64))
+    user_id: Mapped[int | None] = FK("users.id", nullable=True)
+    code_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class ExtensionSession(Base):
+    """Revocable short-lived opaque credentials, never accepted by the web API."""
+    __tablename__ = "extension_sessions"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    user_id: Mapped[int] = FK("users.id", index=True)
+    extension_id: Mapped[str] = mapped_column(String(32))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = TS()

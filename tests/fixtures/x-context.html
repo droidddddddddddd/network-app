@@ -1,0 +1,7 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>X DOM integration fixture</title><style>body{background:#101619;color:#e7e9ea;font:16px/1.5 system-ui;margin:20px;max-width:620px}article{border:1px solid #38444d;padding:18px;margin:18px 0;border-radius:12px}a{color:#a9c8e1}h1{font-size:22px}</style></head><body>
+<h1>X DOM integration fixture — no real X actions</h1>
+<!-- Legacy/current logged-in X test-id adapter. Synthetic text; structural fixture, not a copied tweet. -->
+<article data-testid="tweet" role="article"><div data-testid="User-Name"><a href="/network_member">Network member</a><a href="/network_member/status/100001">@network_member · now</a></div><div data-testid="tweetText" lang="en">Researching $CTX. Address mention: 11111111111111111111111111111111</div><div role="group" aria-label="Post actions">Reply · Repost · Like</div></article>
+<!-- New public SSR X adapter, observed on x.com/solana on November 7, 2026: article.group/post + status link. -->
+<article class="group/post flex flex-col gap-1"><div class="flex gap-2"><a href="/network_member">Network member</a><a href="/network_member/status/100002">now</a></div><div class="post-content">$CTX community research — not investment advice.</div><div data-engagement-action="reply">Reply</div></article>
+</body></html>

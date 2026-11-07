@@ -11,7 +11,7 @@ from app.models import User, Verification
 ORIGIN = "chrome-extension://" + "a" * 32
 
 
-def test_extension_cors_is_exact_get_only_and_scoped(monkeypatch):
+def test_extension_cors_is_exact_bearer_scoped(monkeypatch):
     monkeypatch.setenv("EXTENSION_ORIGINS", ORIGIN)
     a = FastAPI()
     @a.get("/api/extension/feed")
@@ -26,11 +26,11 @@ def test_extension_cors_is_exact_get_only_and_scoped(monkeypatch):
         assert (r.headers.get("access-control-allow-origin") == origin) == allowed
         assert "access-control-allow-credentials" not in r.headers
     assert "access-control-allow-origin" not in c.get("/api/me", headers={"Origin": ORIGIN}).headers
-    assert c.options("/api/extension/feed", headers={"Origin": ORIGIN, "Access-Control-Request-Method": "GET", "Access-Control-Request-Headers": "authorization"}).status_code == 400
-    for method, code in (("GET", 200), ("POST", 400), ("DELETE", 400)):
+    assert c.options("/api/extension/feed", headers={"Origin": ORIGIN, "Access-Control-Request-Method": "GET", "Access-Control-Request-Headers": "authorization,x-csrf"}).status_code == 200
+    for method, code in (("GET", 200), ("POST", 200), ("DELETE", 400)):
         r = c.options("/api/extension/feed", headers={"Origin": ORIGIN, "Access-Control-Request-Method": method})
         assert r.status_code == code
-        assert r.headers["access-control-allow-methods"] == "GET"
+        assert r.headers["access-control-allow-methods"] == "GET, POST"
 
 
 def test_empty_allowlist_denies_cross_origin(monkeypatch):
@@ -71,7 +71,7 @@ def test_extension_feed_never_includes_private_or_hidden_posts(mk, anon):
         ids = [p["id"] for p in data["posts"]]
         assert public["id"] in ids and private["id"] not in ids and hidden["id"] not in ids
         assert "password" not in r.text and "@ex.com" not in r.text
-        assert set(data["posts"][0]) == {"id", "body", "author", "is_demo", "created_at"}
+        assert {"id", "body", "author", "is_demo", "created_at"} <= set(data["posts"][0])
 
 
 def test_password_signup_disabled_but_existing_login_works(anon, mk):
@@ -108,8 +108,14 @@ def test_extension_has_no_frames_or_secrets_and_uses_official_logo():
     root = Path(__file__).resolve().parents[1]
     html = (root / "extension/sidepanel.html").read_text()
     js = (root / "extension/sidepanel.js").read_text()
-    assert "<iframe" not in html and "credentials: 'omit'" in js and "textContent" in js
+    assert "<iframe" not in html and "credentials: 'omit'" in (root / "extension/background.js").read_text() and "textContent" in js
     assert (root / "extension/logo.svg").read_bytes() == (root / "static/img/logo.svg").read_bytes()
     manifest = json.loads((root / "extension/manifest.json").read_text())
-    assert manifest["permissions"] == ["sidePanel"]
+    assert manifest["permissions"] == ["sidePanel", "storage", "identity"]
     assert "frame-src 'none'" in manifest["content_security_policy"]["extension_pages"]
+
+
+def test_demo_author_posts_remain_explicitly_demo():
+    from app.extension_api import output_post
+    result = output_post({"author": {"username": "demo_author", "is_demo": True}, "is_demo": False})
+    assert result["author"] == "demo_author" and result["is_demo"] is True

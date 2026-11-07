@@ -14,7 +14,7 @@ Included:
 - Opportunities, applications, messages, notifications, invites, events, moderation, achievements, and reputation rankings.
 - Proof-of-Call: users publish token calls which are timestamped and tracked against read-only market data. A call is not proof that the author bought or sold the token.
 - Read-only Solana and DexScreener research, including token prices, market caps, liquidity, and creator evidence where available.
-- Responsive web app / PWA and experimental read-only Chrome X companion panel.
+- Responsive web app / PWA and beta Chrome X companion panel.
 
 Explicitly excluded:
 - Live trading, swaps, buy/sell execution, orders, transaction construction, and transaction signing.
@@ -68,7 +68,7 @@ The full commented reference is `.env.example`; never commit real values.
 | `PUBLIC_BASE_URL` | X sign-in | Exact public HTTPS URL, no trailing slash. |
 | `X_CLIENT_ID`, `X_CLIENT_SECRET` | X sign-in | Server-only OAuth credentials; without both, new signup is unavailable (no password fallback). |
 | `ENABLE_WALLET_FEATURES` | this release | Keep `0`. Wallet signing/backing endpoints return 404; stale profile wallets are hidden and preserved in the database. |
-| `EXTENSION_ORIGINS` | companion CORS | Exact comma-separated `chrome-extension://<id>` origins, no wildcard. Public read-only feed only. |
+| `EXTENSION_ORIGINS` | companion CORS | Exact comma-separated `chrome-extension://<id>` origins, no wildcard. Public lookups and origin-bound companion bearer sessions; never web cookies. |
 | `ENABLE_GOOGLE_RECOVERY` | no | Default `0`. Temporary `1` permits existing linked Google identities to recover and link X, never Google signup/linking. |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | recovery only | Retain until Google-only members have migrated; not advertised as public login. |
 | `ADMIN_USERNAMES` | moderation | Comma-separated administrator usernames; not an account-recovery bypass. |
@@ -131,13 +131,17 @@ NETWORK does not route orders or execute transactions. Market data can be delaye
 
 ## Chrome X companion
 
-The `extension/` directory contains an **experimental** Chrome Manifest V3 companion. In `chrome://extensions`, enable Developer mode → **Load unpacked** → select `extension/`. The toolbar opens a native popup; **Open side panel** or the NETWORK launcher on X opens the same native UI alongside the page.
+The `extension/` directory contains a Manifest V3 **beta** companion: native popup/side panel, X sign-in, member feeds, posting, likes, replies and optional inline public context on X. Load it unpacked from `chrome://extensions` with Developer mode enabled. **Open NETWORK** still opens the full web app in a normal tab; the extension never frames it.
 
-The panel fetches public NETWORK posts directly from `/api/extension/feed`, including explicit DEMO labels. It never frames the site, reads X posts, or receives a private session. **Open NETWORK / Sign in with X** opens a normal top-level browser tab where the existing secure X OAuth flow works. Personal feeds, posting, messaging and private Networks stay in that tab; authenticated extension sessions and contextual X post overlays are not implemented.
+Configure Render `EXTENSION_ORIGINS=chrome-extension://<actual-id>` (comma-separated exact IDs), then restart. Use the ID shown in `chrome://extensions` for unpacked development and the stable Store ID for distribution. IDs can differ by installation path; no wildcard or web origins are accepted. Do not put these IDs in the credentialed `CORS_ORIGINS` setting. The server permits GET/POST only on `/api/extension/*`, with explicit headers and no cookie credentials. Authenticated requests carry a registered extension ID and an ID-bound, extension-only bearer token. An Origin, when present, must match; Chrome host-permitted worker fetches may omit it and must send the explicit `x-network-extension` header instead. The header alone never authenticates a request.
 
-Set Render `EXTENSION_ORIGINS=chrome-extension://<32-character-extension-id>` (comma-separated exact IDs if needed), then restart. Find the installed ID on `chrome://extensions`; unpacked IDs can differ by machine/path. No wildcard or web origins are accepted. CORS is credential-free, GET-only, and scoped to the extension feed. Chrome's explicit host permission may allow privileged extension fetches even without CORS; the endpoint is intentionally public, not protected by CORS as an authorization boundary. The main site's `X-Frame-Options: DENY` and `frame-ancestors 'none'` remain unchanged.
+**Sign in with X** starts a user-initiated top-level `chrome.identity.launchWebAuthFlow` window. The existing server-side X OAuth/PKCE flow redirects a one-time, extension-PKCE-bound code to `https://<id>.chromiumapp.org/network`; only that code and state are in the URL, never a session token. Code expiry is 60 seconds; exchange consumes it atomically. Provider secrets stay server-side. The worker stores the resulting one-hour session only in trusted-context `chrome.storage.session`; only a hash is retained in PostgreSQL. This is memory-scoped extension storage, **not an httpOnly cookie**. Content scripts cannot read it or invoke member actions. Browser restart clears it. Logout revokes it server-side; if offline, the UI warns that remote revocation was not confirmed and expiry remains the bound. The separate website session is unaffected.
 
-No client secrets, access tokens, wallet keys, or tokens in URLs/storage/logs are used by this companion. If the site address changes, update `extension/config.js`, the host permission and `connect-src` in `extension/manifest.json`. See [extension/README.md](extension/README.md) for local browser validation and remaining release gates.
+Feed selectors support Discover, My network, Following and My posts. Posts can target your public profile or a joined Network; likes/replies use the same server permission handlers as the website. Private membership, blocks, bans and suspension checks stay server-side. No wallet or trade execution is added.
+
+Inline contextual cards are **off until opted in**. A throttled MutationObserver recognizes X article adapters and extracts only an author handle, first cashtag and first Solana-like address. These references, not full tweet text, query public NETWORK linked profiles/published calls. Cards never include private/member data, even when signed in. Addresses are mentions, not verified contracts; cashtags are ambiguous. Context uses existing NETWORK records rather than promising universal token coverage. No X posting, likes, follows or bulk scraping are automated.
+
+Build an upload ZIP with `python scripts/build_extension.py --output dist/network-x-companion.zip`. It includes runtime assets and node-N icons only, not tests, credentials or listing drafts; it does not publish anything. [Store listing draft](extension/STORE_LISTING.md), [packaged privacy policy](extension/privacy.html) and the public `/extension-privacy` page accompany it. Read [extension/README.md](extension/README.md) for setup, security boundaries and release gates. Production X authorization, actual Store distribution and Render/PostgreSQL must be verified separately; local provider mocks are not production certification.
 
 ## Tests and checks
 
@@ -145,7 +149,7 @@ No client secrets, access tokens, wallet keys, or tokens in URLs/storage/logs ar
 pytest -q
 python scripts/check_rules.py
 # Optional browser smoke check (requires Playwright + full Chromium):
-python tests/extension_browser_check.py --shots /workspace/network-new/shots
+python tests/extension2_browser_check.py --shots /workspace/network-new/shots
 ```
 
 The test suite uses mocked OAuth provider responses and local SQLite migrations. Set `TEST_DATABASE_URL` to a dedicated PostgreSQL test database to run against Postgres. The wallet-related legacy tests explicitly opt into `ENABLE_WALLET_FEATURES=1` in the test process; production must remain at `0` for this release.
@@ -168,4 +172,4 @@ Before production launch, run the full suite, verify database migrations, and ma
 - Reputation comes from records, not purchased placement or follower/member counts. Rankings expose their methodology and refresh age.
 - CSRF requires `x-csrf: 1` with SameSite cookies. Server-side permissions, DB-backed rate limits, upload validation, CSP, anti-framing headers, audit logs and privacy choices remain enforced. CORS is not authentication.
 - Production uses persistent PostgreSQL, not SQLite. Keep Render at the repository root. Preserve the official node-N logo.
-- Do not claim an untested feature works or unfinished functionality is complete. Extension public-feed tests do not verify live X login, Chrome Web Store distribution or inline contextual overlays.
+- Do not claim an untested feature works or unfinished functionality is complete. Mock-provider extension tests do not verify production X consent, Chrome Web Store distribution or production deployment. X layout changes can affect inline cards; do not claim universal compatibility.

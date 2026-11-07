@@ -140,8 +140,12 @@ def providers():
 
 
 @router.get("/api/auth/oauth/{p}/start", dependencies=[rate_limit("oauth", 20, 600)])
-def start(p: str, request: Request, mode: str = "login", user: User | None = Depends(optional_user), db: Session = Depends(get_db)):
+def start(p: str, request: Request, mode: str = "login", extension_request: str = "", user: User | None = Depends(optional_user), db: Session = Depends(get_db)):
     cfg = provider_or_404(p)
+    if extension_request:
+        if p != "x" or mode != "login": raise HTTPException(400, "Invalid extension sign-in.")
+        from .extension_auth import pending_auth
+        pending_auth(db, request, extension_request)
     if p == "google" and mode != "login":
         raise HTTPException(403, "Google is for existing-account recovery only. Link X instead.")
     if mode not in ("login", "link"): raise HTTPException(400, "mode must be login or link")
@@ -149,7 +153,7 @@ def start(p: str, request: Request, mode: str = "login", user: User | None = Dep
     db.execute(delete(OAuthState).where(OAuthState.created_at < utcnow() - timedelta(seconds=STATE_TTL)))
     state, verifier, nonce, bind = secrets.token_urlsafe(32), secrets.token_urlsafe(64), secrets.token_urlsafe(24), secrets.token_urlsafe(32)
     db.add(OAuthState(state=state, browser=sha(bind), provider=p, mode=mode, user_id=user.id if mode == "link" else None,
-                      verifier=verifier, nonce=nonce if p == "google" else ""))
+                      verifier=verifier, nonce=nonce if p == "google" else "", extension_request=extension_request))
     commit(db)
     q = {"response_type": "code", "client_id": creds(p)[0], "redirect_uri": redirect_uri(request, p), "scope": cfg["scope"], "state": state,
          "code_challenge": b64url(hashlib.sha256(verifier.encode()).digest()), "code_challenge_method": "S256"}
@@ -181,36 +185,44 @@ def callback(p: str, request: Request, code: str = "", state: str = "", error: s
     if not st or st.provider != p or not bind or not secrets.compare_digest(st.browser, sha(bind)):
         return done("bad_state", p)
     db.delete(st); commit(db)  # single use, even if what follows fails
-    if (utcnow() - aware(st.created_at)).total_seconds() > STATE_TTL: return done("expired", p)
-    if error or not code: return done("denied", p)
+    def failure(code):
+        if st.extension_request:
+            from .extension_auth import fail_auth
+            return fail_auth(db, request, st.extension_request, code)
+        return done(code, p)
+    if (utcnow() - aware(st.created_at)).total_seconds() > STATE_TTL: return failure("expired")
+    if error or not code: return failure("denied")
     try:
         prof = profile_from(p, exchange_code(p, code, st.verifier, redirect_uri(request, p)), st.nonce)
     except Exception:
-        return done("provider_error", p)
+        return failure("provider_error")
     existing = db.scalar(select(LinkedAccount).where(LinkedAccount.provider == p, LinkedAccount.subject == prof["subject"]))
     ip = ip_of(request)
     if p == "google" and (st.mode != "login" or not existing):
-        return done("recovery_unavailable", p)
+        return failure("recovery_unavailable")
     if p == "google" and not prof["email_verified"]:
-        return done("email_unverified", p)
+        return failure("email_unverified")
     if st.mode == "link":
         from .security import read_token
         uid = read_token(request.cookies.get(COOKIE))
-        if not uid or uid != st.user_id: return done("session_changed", p)
-        if existing and existing.user_id != uid: return done("taken", p)
+        if not uid or uid != st.user_id: return failure("session_changed")
+        if existing and existing.user_id != uid: return failure("taken")
         mine = db.scalar(select(LinkedAccount).where(LinkedAccount.user_id == uid, LinkedAccount.provider == p))
-        if mine and mine.subject != prof["subject"]: return done("already_linked", p)
-        if p == "google" and not prof["email_verified"]: return done("email_unverified", p)
+        if mine and mine.subject != prof["subject"]: return failure("already_linked")
+        if p == "google" and not prof["email_verified"]: return failure("email_unverified")
         la = mine or LinkedAccount(user_id=uid, provider=p, subject=prof["subject"])
         apply_profile(la, prof); db.add(la)
         u = db.get(User, uid)
         if p == "x" and not u.x_handle: u.x_handle = prof["handle"][:20]
         audit(db, uid, None, f"oauth.link.{p}", f"user:{uid}", "", ip); commit(db)
-        return done("linked", p)
+        return failure("linked")
     # login / sign up
     if existing:
         apply_profile(existing, prof)
         audit(db, existing.user_id, None, f"oauth.login.{p}", f"user:{existing.user_id}", "", ip); commit(db)
+        if st.extension_request:
+            from .extension_auth import finish_auth
+            return finish_auth(db, request, st.extension_request, db.get(User, existing.user_id))
         r = done("logged_in", p); set_session(r, existing.user_id); return r
     u = User(username=unique_username(db, prof["handle"] or prof["email"].split("@")[0]),
              email=prof["email"] if p == "google" else f"x_{prof['subject']}{PLACEHOLDER_EMAIL}",
@@ -219,6 +231,9 @@ def callback(p: str, request: Request, code: str = "", state: str = "", error: s
     db.add(u); db.flush()
     la = LinkedAccount(user_id=u.id, provider=p, subject=prof["subject"]); apply_profile(la, prof); db.add(la)
     audit(db, u.id, None, f"oauth.signup.{p}", f"user:{u.id}", "", ip); commit(db)
+    if st.extension_request:
+        from .extension_auth import finish_auth
+        return finish_auth(db, request, st.extension_request, u)
     r = done("signed_up", p); set_session(r, u.id); return r
 
 

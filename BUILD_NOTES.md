@@ -1,33 +1,34 @@
-# Build notes
+# NETWORK v0.4 build notes
 
-This package preserves the uploaded FastAPI / SQLAlchemy / Alembic / vanilla-JS application and adds the first X companion extension.
+## Companion implementation
 
-## Main changes in this compilation
+- Native popup/side-panel UI replaces framing; original main-site anti-framing/CSP protections remain.
+- X sign-in uses the existing server-side OAuth PKCE flow plus a browser-bound, extension-generated PKCE handoff. Canonical chromiumapp.org redirect carries only one-time code/state (or a fixed failure code); authorization codes expire after 60 seconds and are atomically single-use.
+- One-hour opaque bearer sessions are hashed server-side, extension-ID-bound, revocable, and scoped only to `/api/extension/*`. The worker uses trusted-only `chrome.storage.session`, never persistent auth storage or content-script credentials. Browser restart clears credentials. Cookie auth is not accepted by the extension API. Supplied Origin must match; host-permitted Chrome worker requests without Origin require the registered `x-network-extension` header plus bearer/PKCE and CSRF protection.
+- Authenticated feeds, joined-Network audiences, post/like/reply actions reuse the web permission handlers. Popup/panel sessions synchronize, and response-generation guards prevent stale private-feed responses after logout.
+- Opt-in X context uses bounded/throttled DOM adapters and a bounded public-data cache. It sends extracted handle/cashtag/address references only. Public linked profiles and published calls are shown; no private feed reaches X. Cashtags/addresses do not imply verified assets or executed trades.
+- Added Alembic `9c2e4a701b36`, auth access-query redaction, deterministic Store archive build, official node-N icon sizes, policy page and listing/disclosure draft. No store action or production deploy is performed by packaging.
 
-1. Public OAuth provider discovery now advertises X only.
-2. The login and signup screens use one X sign-in flow; X creates an account on first authorization and logs in on later authorizations.
-3. Google credentials were removed from the Render Blueprint template. Legacy Google callback code remains to avoid destructive account migration; no Google button is shown.
-4. Wallet-signature APIs are disabled unless `ENABLE_WALLET_FEATURES=1`. Production configuration explicitly sets it to `0`.
-5. Wallet-signing UI controls and wallet profile editing were removed. Read-only on-chain creator and market research remain.
-6. Added `extension/`, a Chrome Manifest V3 companion panel for X.
-7. Added `RELEASE_SCOPE.md` documenting included and excluded functionality.
+## Repeatable validation
 
-## Important implementation boundaries
+```bash
+pytest -q
+python scripts/check_rules.py
+python tests/extension2_browser_check.py --shots /workspace/network-new/shots
+python scripts/build_extension.py --output dist/network-x-companion.zip
+```
 
-- Existing calls are records and read-only market-data tracking; they are not executed trades.
-- There is no buy/sell or swap execution path in this release.
-- The experimental Chrome extension uses native packaged UI and the public feed API, not an iframe. X sign-in and private features open in a normal browser tab. It does not render contextual cards on individual X posts.
-- Existing database fields are preserved to avoid destructive migrations. They are not an invitation to enable wallet features.
+Use `--skip-real-x` for deterministic browser tests without the best-effort unsigned public X navigation. The browser harness starts a local, isolated, Alembic-migrated database and mock X provider transport, and invokes the real `chrome.identity.launchWebAuthFlow` with a real unpacked extension. Test-only code is never included in the upload archive.
 
-## Validation
+Real production X credentials/consent, live Google recovery, Store review/install, native browser chrome visual rendering and live Render/PostgreSQL remain separate release gates. Public X compatibility can be blocked by the site; the saved structural fixture includes legacy test-id markup and the public SSR article structure observed on November 7, 2026. No claim of universal DOM compatibility or 100% production certification is made.
 
-Run `pytest -q`, `python scripts/check_rules.py`, and `python tests/extension_browser_check.py --shots /workspace/network-new/shots` before release. See extension/README.md for the exact headless test scope and remaining live-provider/browser-UI release gates. No production deployment is implied by local tests.
+Production continues to require persistent PostgreSQL; SQLite is used only in isolated local tests. The box has no PostgreSQL server binary, and package repository access failed during the prior review. PostgreSQL DDL rendering is available, but is not a substitute for a real PostgreSQL run.
 
-### Local validation — November 7, 2026
+## Final local validation — November 7, 2026
 
-- Full pytest: **68 passed, 5 skipped** (four opt-in live-chain checks and the Postgres multi-process realtime check). One upstream TestClient deprecation warning.
-- `scripts/check_rules.py`: passed. Python/JavaScript syntax and `git diff --check`: passed.
-- Alembic rendered all migrations as PostgreSQL SQL successfully. A real PostgreSQL run was not available: this box had client tools but no server binary, and the package repository could not be reached. SQLite was used for isolated local tests only; production rejects SQLite/missing database URLs.
-- Headless full Chromium **156.0.8078.4**, real unpacked MV3 extension via `--load-extension`: local public feed rendered; private/hidden/removed posts excluded; untrusted markup remained text; empty/offline/retry states passed; workspace opened top-level. Both popup and mocked-X launcher clicks resolved native `sidePanel.open`. No page errors.
-- Screenshots: `/workspace/network-new/shots/ext-feed.png`, `ext-empty.png`, `ext-offline.png`, `ext-x-launcher.png`. The feed/empty/offline screenshots show the real packaged extension document in an extension tab; the X document is a fixture. Native Chrome toolbar/side-panel chrome was not visually verified.
-- Real X OAuth, real Google recovery, live X-page integration and Web Store distribution remain unverified. Authenticated extension sessions and inline contextual post overlays are not implemented. No production push/deploy was performed.
+- Full suite: **76 passed, 5 skipped**, one upstream TestClient deprecation warning. Skips are four opt-in live-chain checks and the PostgreSQL multi-process realtime check.
+- Real unpacked MV3 extension in headless full Chromium **156.0.8078.4**, using the real `chrome.identity.launchWebAuthFlow` and a local mock X provider: passed. Verified PKCE handoff, trusted session storage, public/private-allowed feeds, public/private posting, like, reply/count update, safe text rendering, content-script denial, context opt-in, both structural X adapters, mutation handling, native sidePanel.open from popup/launcher, cross-view session sync and server logout revocation. No page errors.
+- The separate unsigned live Chromium visit to `https://x.com/solana` was denied with **HTTP 403** (recorded in `ext2-real-x-attempt.png`). Deterministic contextual-card checks used `tests/fixtures/x-context.html`; current public SSR structure was additionally inspected from public HTML. Live X frontend compatibility is not certified.
+- Successful screenshots in `/workspace/network-new/shots/`: `ext2-public.png`, `ext2-auth-actions.png`, `ext2-private-feed.png`, `ext2-context-fixture.png`, `ext2-logout.png`. They show the packaged extension document in an extension tab and the explicit structural X fixture, not production credentials/data or native browser chrome.
+- Rules, Python/JavaScript syntax and whitespace checks passed. All migrations, including the new extension tables, rendered as PostgreSQL DDL. No real PostgreSQL server test or production deployment was performed.
+- Store ZIP build is deterministic and tested to contain only allowlisted runtime files, official node-N assets and the privacy page. Listing/privacy/disclosure drafts still require operator review and actual Store submission; no upload, publication or push was performed.
