@@ -523,6 +523,7 @@ const OAUTH_MSG = { logged_in: 'Logged in.', signed_up: 'Welcome! Your Network P
   provider_error: "The provider didn't confirm the sign-in. Please try again.", session_changed: 'Your session changed during sign-in. Please try again.',
   taken: 'That account is already linked to a different NETWORK Passport.', already_linked: 'You already have an account of this type linked. Unlink it first.',
   email_unverified: 'This legacy sign-in method is unavailable.', email_exists: 'An existing NETWORK account uses this email. Contact support to recover access.',
+  recovery_unavailable: 'No existing linked Google account was recovered. Contact the platform administrator; new accounts must use X.',
   login_required: 'Log in first to link an account.' };
 on(/^\/oauth\/(\w+)\/(\w+)$/, async (c, code, p) => {
   const ok = ['logged_in', 'signed_up', 'linked'].includes(code);
@@ -831,7 +832,7 @@ on(/^\/settings$/, c => {
   oauthProviders().then(pv => {
     const la = m.linked_accounts || [], has = p => la.find(a => a.provider === p);
     const methods = la.length + (m.has_password ? 1 : 0);
-    $('#lal').innerHTML = ['x'].map(p => { const a = has(p), nm = 'X';
+    $('#lal').innerHTML = ['x', ...(has('google') ? ['google'] : [])].map(p => { const a = has(p), nm = p === 'x' ? 'X' : 'Google (legacy recovery)';
       if (a) return `<div class="li small"><span class="pill g">✓ ${esc(a.label)}</span><span class="grow tiny muted">${p === 'google' ? esc(a.email || '') : ''}</span>
         ${p === 'google' ? `<label class="tiny row"><input type="checkbox" data-showemail ${a.show_email ? 'checked' : ''}> Show email on Passport</label>` : ''}
         <button class="btn ghost sm" data-unlink="${p}" ${methods < 2 ? 'disabled title="Keep at least one way to log in: set a password or link another account first."' : ''}>Unlink</button></div>`;

@@ -1,15 +1,10 @@
-chrome.runtime.onInstalled.addListener(() => {
-  if (chrome.sidePanel && chrome.sidePanel.setPanelBehavior) {
-    chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
-  }
-});
-chrome.action.onClicked.addListener(async (tab) => {
-  if (chrome.sidePanel && tab && tab.windowId != null) {
-    await chrome.sidePanel.open({ windowId: tab.windowId });
-  }
-});
-chrome.runtime.onMessage.addListener((message, sender) => {
-  if (message && message.type === 'OPEN_NETWORK_PANEL' && sender.tab && sender.tab.windowId != null) {
-    chrome.sidePanel.open({ windowId: sender.tab.windowId }).catch(() => {});
-  }
+// Only the packaged content script on X can ask to open a panel.
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type !== 'OPEN_NETWORK_PANEL' || !sender.tab ||
+      !/^https:\/\/(x\.com|twitter\.com)\//.test(sender.url || '')) return;
+  if (!chrome.sidePanel) { sendResponse({ ok: false }); return; }
+  chrome.sidePanel.open({ windowId: sender.tab.windowId }).then(
+    () => sendResponse({ ok: true }), () => sendResponse({ ok: false })
+  );
+  return true;
 });

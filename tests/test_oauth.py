@@ -135,27 +135,39 @@ def test_state_csrf_replay_and_denied(anon, fake):
     assert flow(C(), fake, "x", {"id": "78", "username": "pkce"}, tamper=swap) == "provider_error"
 
 
-def test_google_nonce_email_collision_and_privacy(anon, fake, mk):
-    C = type(anon)  # same browser class as the fixture (re-importing conftest would rebuild the test DB)
-    a = mk("gmailer")  # existing password account with email gmailer@ex.com
-    # signing in with a Google account that has the same email does NOT merge accounts
-    assert flow(anon, fake, "google", {"sub": "g-1", "email": "gmailer@ex.com"}) == "email_exists"
+def test_google_recovery_is_opt_in_existing_only_and_links_x(anon, fake, mk, monkeypatch):
+    C = type(anon)
+    monkeypatch.delenv("ENABLE_GOOGLE_RECOVERY", raising=False)
+    assert anon.get("/api/auth/oauth/google/start", follow_redirects=False).status_code == 404
+    monkeypatch.setenv("ENABLE_GOOGLE_RECOVERY", "1")
+    # New Google identities, even with a matching email, cannot sign up or merge.
+    a = mk("gmailer")
+    assert flow(anon, fake, "google", {"sub": "g-new", "email": "gmailer@ex.com"}) == "recovery_unavailable"
     assert anon.ok("GET", "/api/me") is None
-    # unverified Google email can't sign up
-    assert flow(C(), fake, "google", {"sub": "g-2", "email": "new@ex.com", "email_verified": False}) == "email_unverified"
-    # wrong nonce in the id_token is rejected
-    assert flow(C(), fake, "google", {"sub": "g-3", "email": "n3@ex.com", "force_nonce": "evil"}) == "provider_error"
-    # the owner links Google while logged in
-    assert flow(a, fake, "google", {"sub": "g-1", "email": "gmailer@ex.com"}, mode="link") == "linked"
+    assert a.get("/api/auth/oauth/google/start?mode=link", follow_redirects=False).status_code == 403
+    # Simulate an actual Google-only legacy member. No admin password reset or identity bypass.
+    from app.models import User
+    with SessionLocal() as db:
+        db.get(User, a.id).password_hash = ""
+        db.add(LinkedAccount(user_id=a.id, provider="google", subject="g-legacy", email="gmailer@ex.com", email_verified=True))
+        db.commit()
+    assert flow(C(), fake, "google", {"sub": "g-legacy", "email": "gmailer@ex.com", "force_nonce": "evil"}) == "provider_error"
+    assert flow(C(), fake, "google", {"sub": "g-legacy", "email": "gmailer@ex.com", "email_verified": False}) == "email_unverified"
+    recovered = C()
+    assert flow(recovered, fake, "google", {"sub": "g-legacy", "email": "gmailer@ex.com"}) == "logged_in"
+    assert recovered.ok("GET", "/api/me")["id"] == a.id
+    assert recovered.ok("GET", "/api/me")["has_password"] is False
     viewer = mk()
-    p = viewer.ok("GET", "/api/users/gmailer")
-    assert p["verification"]["google_account"]["badge"] == "Google account verified"
-    assert "gmailer@ex.com" not in json.dumps(p)  # email never public by default
-    a.ok("PUT", "/api/auth/oauth/google/visibility", json={"show_email": True})
+    assert "gmailer@ex.com" not in json.dumps(viewer.ok("GET", "/api/users/gmailer"))
+    recovered.ok("PUT", "/api/auth/oauth/google/visibility", json={"show_email": True})
     assert viewer.ok("GET", "/api/users/gmailer")["linked_accounts"][0]["email"] == "gmailer@ex.com"
-    # and now Google login works for that account
-    b = C()
-    assert flow(b, fake, "google", {"sub": "g-1", "email": "gmailer@ex.com"}) == "logged_in" and b.ok("GET", "/api/me")["username"] == "gmailer"
+    assert flow(recovered, fake, "x", {"id": "recover-x", "username": "recovered_x"}, mode="link") == "linked"
+    # A temporary Google recovery option must not allow unlinking the only durable X login.
+    assert recovered.delete("/api/auth/oauth/x").status_code == 400
+    monkeypatch.setenv("ENABLE_GOOGLE_RECOVERY", "0")
+    recovered.ok("DELETE", "/api/auth/oauth/google")
+    assert flow(C(), fake, "x", {"id": "recover-x", "username": "recovered_x"}) == "logged_in"
+    assert anon.get("/api/auth/oauth/google/start", follow_redirects=False).status_code == 404
 
 
 def test_link_collisions_and_unlink(anon, fake, mk):

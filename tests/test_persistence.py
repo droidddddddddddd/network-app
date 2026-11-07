@@ -25,11 +25,13 @@ def test_persists_after_restart():
     d = tempfile.mkdtemp()
     env = {**os.environ, "DATABASE_URL": os.environ["DATABASE_URL"] if os.getenv("TEST_DATABASE_URL") else f"sqlite:///{d}/p.db", "DISABLE_TRACKER": "1", "UPLOAD_DIR": f"{d}/up"}
     subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"], cwd=ROOT, env=env, check=True)
+    name = f"persist{os.getpid() % 100000}"
+    subprocess.run([sys.executable, "-c", "from app.db import SessionLocal; from app.models import User; from app.security import hash_pw; import sys; db=SessionLocal(); db.add(User(username=sys.argv[1], display_name=sys.argv[1], email=sys.argv[1]+'@ex.com', password_hash=hash_pw('password123'))); db.commit()", name], cwd=ROOT, env=env, check=True)
     port = _port(); H = {"x-csrf": "1"}
     p = _start(env, port)
     try:
         c = httpx.Client(base_url=f"http://127.0.0.1:{port}", headers=H)
-        assert c.post("/api/auth/register", json={"username": f"persist{os.getpid() % 100000}", "email": f"p{os.getpid()}@ex.com", "password": "password123"}).status_code == 200
+        assert c.post("/api/auth/login", json={"login": name, "password": "password123"}).status_code == 200
         assert c.post("/api/networks", json={"name": "Persistent Net", "type": "Personal"}).status_code == 200
         assert c.post("/api/posts", json={"body": "survives restarts"}).status_code == 200
     finally:

@@ -1,20 +1,56 @@
 {
   "manifest_version": 3,
-  "name": "NETWORK — X Companion",
-  "version": "0.1.0",
-  "description": "Open your NETWORK social crypto intelligence workspace alongside X.",
-  "permissions": ["sidePanel", "storage"],
+  "name": "NETWORK \u2014 X Companion",
+  "version": "0.2.0",
+  "description": "Read the public NETWORK feed alongside X; sign in securely in a normal NETWORK tab.",
+  "permissions": [
+    "sidePanel"
+  ],
   "host_permissions": [
-    "https://x.com/*",
-    "https://twitter.com/*",
     "https://network-app-65f6.onrender.com/*"
   ],
-  "background": {"service_worker": "background.js"},
-  "action": {"default_title": "Open NETWORK"},
-  "side_panel": {"default_path": "sidepanel.html"},
-  "content_scripts": [{
-    "matches": ["https://x.com/*", "https://twitter.com/*"],
-    "js": ["content.js"],
-    "run_at": "document_idle"
-  }]
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Open NETWORK companion",
+    "default_popup": "sidepanel.html",
+    "default_icon": {
+      "32": "icons/favicon-32.png",
+      "192": "icons/icon-192.png"
+    }
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://x.com/*",
+        "https://twitter.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "icons": {
+    "32": "icons/favicon-32.png",
+    "192": "icons/icon-192.png"
+  },
+  "content_security_policy": {
+    "extension_pages": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src https://network-app-65f6.onrender.com; object-src 'none'; base-uri 'none'; frame-src 'none'"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "logo.svg"
+      ],
+      "matches": [
+        "https://x.com/*",
+        "https://twitter.com/*"
+      ]
+    }
+  ]
 }

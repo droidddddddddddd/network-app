@@ -57,7 +57,13 @@ def mk():
         _n[0] += 1
         name = name or f"user{_n[0]}"
         c = C(name)
-        u = c.ok("POST", "/api/auth/register", json={"username": name, "email": f"{name}@ex.com", "password": "password123", "display_name": name.title()})
+        # These are pre-existing legacy accounts, not public password signups.
+        from app.db import SessionLocal
+        from app.models import User
+        with SessionLocal() as db:
+            db.add(User(username=name, email=f"{name}@ex.com", password_hash=security.hash_pw("password123"), display_name=name.title()))
+            db.commit()
+        u = c.ok("POST", "/api/auth/login", json={"login": name, "password": "password123"})
         c.id = u["id"]
         security.reset_rate_limits()
         return c

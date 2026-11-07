@@ -4,7 +4,12 @@
 - Public sign-in is X only (OAuth 2.0 + PKCE). Password accounts can recover via the unlinked `#/legacy-login` route, then link X. Google buttons removed; legacy Google records are kept.
 - Wallet signing, wallet verification and CTO holder backing are switched off (`ENABLE_WALLET_FEATURES=0`; those APIs return 404). Read-only token and creator research stays.
 - Wallet address field and its privacy toggle removed from profile settings.
-- Added `extension/`: an experimental Chrome side-panel starter for X (not yet functional, see README).
+- Replaced the blank iframe extension with packaged, experimental popup/side-panel UI and a public read-only feed API. X sign-in/full functionality open in a normal tab; no auth tokens enter the extension. Official node-N assets preserved.
+- Exact-ID `EXTENSION_ORIGINS` CORS applies only to GET `/api/extension/feed`, without credentials. Main-site anti-framing protections remain unchanged. Feed content is text-only and excludes private/hidden/removed posts even when supplied a member cookie.
+- Password registration now returns 403; existing password login remains. Added opt-in, existing-linked-account-only Google recovery (`ENABLE_GOOGLE_RECOVERY`), with a tested mocked-provider recovery → link X flow and admin runbook.
+- Wallet-off mode hides stale profile wallet addresses/badges, ignores wallet profile edits and preserves stored records. Production now refuses missing/SQLite database URLs.
+- Restored PWA installation, environment reference, verification policy and safety documentation with v0.4 scope; updated extension/build/release docs.
+- Added API/security regressions, a repeatable rules check and an isolated Playwright Chromium extension smoke check (see extension/README.md for limits).
 - Added RELEASE_SCOPE.md and BUILD_NOTES.md.
 
 ## v0.3.1-beta (2026-11-02)

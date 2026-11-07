@@ -1,3 +1,4 @@
+from .features import wallet_features_enabled
 import math
 from datetime import datetime, timedelta, timezone
 from statistics import median
@@ -340,6 +341,8 @@ def verification_status(db, subject_type: str, subject_id: int, trading: dict | 
         if v.kind not in rows or v.status == "verified" or rows[v.kind].status != "verified": rows[v.kind] = v
     out = {}
     kinds = ["wallet", "x_account", "google_account", "trading"] if subject_type == "user" else ["project", "devwallet", "metadata", "trading"]
+    if not wallet_features_enabled():
+        kinds = [k for k in kinds if k not in ("wallet", "devwallet", "metadata")]
     links = {la.provider: la for la in db.scalars(select(LinkedAccount).where(LinkedAccount.user_id == subject_id))} if subject_type == "user" else {}
     for k in kinds:
         label, how = VERIFY_LABELS[k]

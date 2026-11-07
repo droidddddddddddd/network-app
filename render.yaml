@@ -30,6 +30,10 @@ services:
         sync: false
       - key: CORS_ORIGINS
         sync: false
+      - key: EXTENSION_ORIGINS
+        sync: false
+      - key: ENABLE_GOOGLE_RECOVERY
+        value: "0"
       - key: S3_BUCKET
         sync: false
       - key: S3_ENDPOINT_URL

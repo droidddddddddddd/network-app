@@ -1,5 +1,12 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NETWORK</title>
-<style>html,body{margin:0;height:100%;background:#07090a;color:#e8f0ec;font:14px system-ui}header{height:44px;display:flex;align-items:center;padding:0 14px;border-bottom:1px solid #202a25;color:#2af08c;font-weight:800;letter-spacing:.12em}iframe{border:0;width:100%;height:calc(100% - 45px);background:#07090a}</style></head>
-<body><header>NETWORK <span style="margin-left:auto;color:#8b9991;font-size:11px;font-weight:500;letter-spacing:0">X COMPANION</span></header>
-<iframe src="https://network-app-65f6.onrender.com" title="NETWORK workspace" allow="clipboard-read; clipboard-write"></iframe></body></html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NETWORK X Companion</title><link rel="stylesheet" href="sidepanel.css">
+<script src="config.js" defer></script><script src="sidepanel.js" defer></script></head>
+<body><header><img src="logo.svg" width="34" height="34" alt="NETWORK node-N logo"><div><strong>NETWORK</strong><small>X COMPANION · EXPERIMENTAL</small></div></header>
+<main><h1>Your network, alongside X.</h1><p class="muted">Public community updates. No X scraping, trading or wallet access.</p>
+<nav><a id="workspace" target="_blank" rel="noopener noreferrer">Open NETWORK / Sign in with X</a>
+<button id="panel" type="button">Open side panel</button></nav>
+<p class="notice">Sign in, post and view private Networks in the secure NETWORK tab. This companion is public and read-only; it does not receive your session or OAuth tokens.</p>
+<div class="heading"><h2>Public feed</h2><button id="refresh" type="button">Refresh</button></div>
+<p id="status" role="status" aria-live="polite">Loading public updates…</p><section id="feed" aria-label="Public NETWORK posts"></section>
+<footer>Calls are published opinions, not executed trades or verified trading performance. Market data may be delayed.</footer></main></body></html>

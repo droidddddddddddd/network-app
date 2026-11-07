@@ -15,7 +15,6 @@ from .models import (User, Follow, Block, Network, Membership, Connection, Post,
                      Application, Message, Notification, Call, ChatMessage, Conversation, Event, Invite, Verification, Achievement,
                      AuditLog, Nonce, Media, RankingSnapshot, NetworkActivity, CtoClaim, CtoBacking, ACTIVITY_TYPES, NETWORK_TYPES, ENDORSE_CATS, OPP_CATS, PROJECT_STAGES, SHARE_KEYS, ADMIN_PERMS, PRIVACY_KEYS, USER_ROLES)
 import secrets
-from fastapi.middleware.cors import CORSMiddleware
 from .schemas import *  # noqa: F403
 from .security import (hash_pw, check_pw, set_session, COOKIE, optional_user, current_user, rate_limit, clean, clean_url,
                        extract_tags, extract_mentions, read_token, PROD, is_platform_admin, ensure_active, suspended)
@@ -23,6 +22,8 @@ from .services import *  # noqa: F403
 from .services import RANKING_METHOD
 from .realtime import hub
 from . import dex, storage
+from .extension import ExtensionCORSMiddleware, WebCORSMiddleware
+from .features import wallet_features_enabled
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
@@ -36,7 +37,7 @@ async def lifespan(app):
     from .db import URL as _DBURL
     await asyncio.to_thread(hub.start, _DBURL)  # no-op unless REALTIME_BACKEND=postgres
     task = asyncio.create_task(dex.tracker_loop()) if os.getenv("DISABLE_TRACKER") != "1" else None
-    cto_task = asyncio.create_task(cto_loop()) if os.getenv("DISABLE_TRACKER") != "1" else None
+    cto_task = asyncio.create_task(cto_loop()) if wallet_features_enabled() and os.getenv("DISABLE_TRACKER") != "1" else None
     yield
     hub.stop()
     for t in (task, cto_task):
@@ -60,8 +61,10 @@ app = FastAPI(title="NETWORK", version="1.0.0", lifespan=lifespan, docs_url=None
 # CORS: same-origin by default. Only origins listed in CORS_ORIGINS (comma separated) may call the API cross-site.
 _origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "").split(",") if o.strip()]
 if _origins:
-    app.add_middleware(CORSMiddleware, allow_origins=_origins, allow_credentials=True,
+    app.add_middleware(WebCORSMiddleware, allow_origins=_origins, allow_credentials=True,
                        allow_methods=["GET", "POST", "PUT", "DELETE"], allow_headers=["content-type", "x-csrf", "authorization"])
+
+app.add_middleware(ExtensionCORSMiddleware)
 
 
 def ip_of(request: Request | None):
@@ -71,11 +74,12 @@ def ip_of(request: Request | None):
 # ---------------------------------------------------------------- security middleware
 @app.middleware("http")
 async def security(request: Request, call_next):
-    if request.url.path.startswith("/api/") and request.method not in ("GET", "HEAD", "OPTIONS"):
-        # CSRF: SameSite=Lax cookie + mandatory custom header (cross-site forms can't set it; no CORS is enabled)
-        if request.headers.get("x-csrf") != "1":
-            return JSONResponse({"detail": "CSRF check failed."}, status_code=403)
-    resp = await call_next(request)
+    # Custom header + SameSite cookies; only explicit trusted web origins get credentialed CORS.
+    if (request.url.path.startswith("/api/") and request.method not in ("GET", "HEAD", "OPTIONS")
+            and request.headers.get("x-csrf") != "1"):
+        resp = JSONResponse({"detail": "CSRF check failed."}, status_code=403)
+    else:
+        resp = await call_next(request)
     resp.headers["X-Content-Type-Options"] = "nosniff"
     resp.headers["X-Frame-Options"] = "DENY"
     resp.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
@@ -125,7 +129,8 @@ def me_out(db, u: User):
     from .oauth import has_password, PLACEHOLDER_EMAIL
     return {**user_brief(u), "email": "" if u.email.endswith(PLACEHOLDER_EMAIL) else u.email, "has_password": has_password(u),
             "linked_accounts": linked_accounts_out(db, u.id, True), "bio": u.bio, "x_handle": u.x_handle, "telegram": u.telegram, "website": u.website,
-            "wallet_address": u.wallet_address, "wallet_verified": u.wallet_verified,
+            "wallet_address": u.wallet_address if wallet_features_enabled() else "",
+            "wallet_verified": u.wallet_verified if wallet_features_enabled() else False,
             "privacy": {k: getattr(u, k) for k in PRIVACY_KEYS}, "unread_notifications": unread, "unread_messages": unread_dm,
             "level": rep["level"], "xp": rep["xp"], "level_progress": rep["level_progress"],
             "role": u.role or "", "interests": [x for x in (u.interests or "").split(",") if x],
@@ -137,15 +142,7 @@ def me_out(db, u: User):
 # ================================================================= AUTH
 @app.post("/api/auth/register", dependencies=[rate_limit("auth", 10, 900)])
 def register(data: RegisterIn, response: Response, db: Session = Depends(get_db)):
-    if db.scalar(select(User.id).where(func.lower(User.username) == data.username.lower())):
-        raise HTTPException(409, "That username is taken.")
-    if db.scalar(select(User.id).where(User.email == data.email)):
-        raise HTTPException(409, "An account with that email already exists.")
-    u = User(username=data.username, email=data.email, password_hash=hash_pw(data.password),
-             display_name=clean(data.display_name, 50) or data.username)
-    db.add(u); commit(db)
-    set_session(response, u.id)
-    return me_out(db, u)
+    raise HTTPException(403, "New accounts must use Continue with X. Existing members can still use legacy login.")
 
 
 @app.post("/api/auth/login", dependencies=[rate_limit("auth", 10, 900)])
@@ -180,9 +177,10 @@ def update_me(data: ProfileIn, user: User = Depends(current_user), db: Session =
     for k in PRIVACY_KEYS:
         v = getattr(data, k)
         if v is not None: setattr(user, k, v)
-    if data.wallet_address != user.wallet_address:
-        user.wallet_verified = False  # changing the wallet never carries verification over
-    user.wallet_address = data.wallet_address
+    if wallet_features_enabled():
+        if data.wallet_address != user.wallet_address:
+            user.wallet_verified = False  # changing the wallet never carries verification over
+        user.wallet_address = data.wallet_address
     commit(db)
     return me_out(db, user)
 
@@ -259,7 +257,7 @@ def get_profile(username: str, viewer: User | None = Depends(optional_user), db:
     return {**user_brief(u), "bio": u.bio, "created_at": iso(u.created_at),
             "x_handle": u.x_handle if show["show_socials"] else "", "telegram": u.telegram if show["show_socials"] else "",
             "website": u.website if show["show_socials"] else "",
-            "wallet_address": u.wallet_address if show["show_wallet"] else "",
+            "wallet_address": u.wallet_address if wallet_features_enabled() and show["show_wallet"] else "",
             "verification": verification_status(db, "user", u.id, ind["verified_trading_performance"]),
             "linked_accounts": linked_accounts_out(db, u.id, me_view),
             "followers": followers, "following": following, "is_following": is_following, "blocked": blocked, "is_me": me_view,
@@ -355,6 +353,18 @@ def feed(tab: str = "network", before: int | None = None, viewer: User | None = 
         stmt = stmt.where(or_(Post.tags.like(f"% {t} %"), Post.tags.like(f"{t} %"), Post.tags.like(f"% {t}"), Post.tags == t))
     if before: stmt = stmt.where(Post.id < before)
     return posts_out(db, list(db.scalars(stmt.order_by(desc(Post.id)).limit(30))), vid)
+
+
+@app.get("/api/extension/feed")
+def extension_feed(response: Response, db: Session = Depends(get_db)):
+    """Anonymous public feed only, even if a caller supplies a site session cookie."""
+    visible, *_ = visible_filter(db, 0)
+    posts = db.scalars(select(Post).where(visible, Post.parent_id.is_(None))
+                       .order_by(desc(Post.id)).limit(12))
+    response.headers["Cache-Control"] = "no-store"
+    return {"posts": [{"id": p.id, "body": p.body, "created_at": iso(p.created_at),
+                       "author": db.get(User, p.author_id).username, "is_demo": p.is_demo}
+                      for p in posts], "scope": "public", "read_only": True}
 
 
 @app.post("/api/posts", dependencies=[rate_limit("post", 20, 60, new_limit=5), rate_limit("post_day", 300, 86400, new_limit=30)])

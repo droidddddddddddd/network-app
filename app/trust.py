@@ -363,6 +363,7 @@ def _devwallet_result(db, n, user, mint, address, request=None):
 
 @router.post("/api/networks/{slug}/verify/devwallet/recheck", dependencies=[rate_limit("verify_check", 20, 3600)])
 def recheck_devwallet(slug: str, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    require_wallet_features()
     n = get_network(db, slug); founder_or_settings(db, n, user)
     v = db.scalar(select(Verification).where(Verification.subject_type == "network", Verification.subject_id == n.id, Verification.kind == "devwallet").order_by(desc(Verification.id)).limit(1))
     if not v or not v.address: raise HTTPException(400, "Sign with the dev wallet first.")

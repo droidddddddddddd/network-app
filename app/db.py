@@ -5,8 +5,12 @@ from sqlalchemy.orm import sessionmaker, DeclarativeBase
 
 def database_url() -> str:
     url = os.getenv("DATABASE_URL", "").strip()
+    if not url and os.getenv("ENV", "").lower() == "production":
+        raise RuntimeError("Production requires DATABASE_URL pointing to PostgreSQL; SQLite is local-only.")
     if not url:
         return "sqlite:///./network.db"  # local fallback
+    if os.getenv("ENV", "").lower() == "production" and not url.startswith(("postgres://", "postgresql://", "postgresql+psycopg://")):
+        raise RuntimeError("Production requires DATABASE_URL pointing to PostgreSQL; SQLite is local-only.")
     # Render gives postgres:// or postgresql:// — use psycopg v3 driver
     if url.startswith("postgres://"):
         url = "postgresql+psycopg://" + url[len("postgres://"):]

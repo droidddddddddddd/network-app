@@ -23,11 +23,11 @@ Wallet-dependent API routes are disabled by default. `ENABLE_WALLET_FEATURES=0` 
 
 ## X sign-in migration note
 
-The public interface offers X only. Existing Google-linked records and legacy password authentication code are retained in the backend for account-recovery/migration safety; they are not presented as public sign-in options. Before fully removing legacy login support, every existing password-only or Google-only account needs a tested X-linking/recovery path. Do not delete those account records or password hashes as part of this release.
+The public interface offers X only. Existing Google-linked records and legacy password authentication code are retained in the backend for account-recovery/migration safety; they are not presented as public sign-in options. Password registration is rejected. For Google-only members, temporarily enable existing-account-only `ENABLE_GOOGLE_RECOVERY=1`, retain the original Google credentials, recover in a normal tab and link X in Settings (README runbook). Before fully removing legacy login support, every existing password-only or Google-only account needs a tested X-linking/recovery path. Do not delete those account records or password hashes as part of this release.
 
 ## Chrome companion status
 
-The extension opens the current NETWORK web app in a Chrome side panel and adds a floating launcher on X. This is a companion panel, not yet a contextual card overlay attached to each X post. Contextual post cards and a secure one-time session handoff are a later phase.
+The experimental extension renders its own public-feed popup/side panel and adds a floating launcher on X. It never frames the site; full NETWORK functionality and X sign-in open in a normal tab. This is a companion panel, not yet a contextual card overlay attached to each X post. Contextual post cards and authenticated extension sessions are not implemented. Configure exact extension IDs in `EXTENSION_ORIGINS`; see extension/README.md for tests and limitations.
 
 ## Production release gates
 

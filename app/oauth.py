@@ -45,6 +45,8 @@ def enabled(p) -> bool:
 
 def provider_or_404(p):
     if p not in PROVIDERS: raise HTTPException(404, "Unknown provider.")
+    if p == "google" and os.getenv("ENABLE_GOOGLE_RECOVERY", "0").strip() != "1":
+        raise HTTPException(404, "Legacy Google recovery is disabled. Contact the platform administrator.")
     if not enabled(p): raise HTTPException(404, f"{PROVIDERS[p]['name']} sign-in isn't configured on this server.")
     return PROVIDERS[p]
 
@@ -140,6 +142,8 @@ def providers():
 @router.get("/api/auth/oauth/{p}/start", dependencies=[rate_limit("oauth", 20, 600)])
 def start(p: str, request: Request, mode: str = "login", user: User | None = Depends(optional_user), db: Session = Depends(get_db)):
     cfg = provider_or_404(p)
+    if p == "google" and mode != "login":
+        raise HTTPException(403, "Google is for existing-account recovery only. Link X instead.")
     if mode not in ("login", "link"): raise HTTPException(400, "mode must be login or link")
     if mode == "link" and not user: return done("login_required", p)
     db.execute(delete(OAuthState).where(OAuthState.created_at < utcnow() - timedelta(seconds=STATE_TTL)))
@@ -185,6 +189,10 @@ def callback(p: str, request: Request, code: str = "", state: str = "", error: s
         return done("provider_error", p)
     existing = db.scalar(select(LinkedAccount).where(LinkedAccount.provider == p, LinkedAccount.subject == prof["subject"]))
     ip = ip_of(request)
+    if p == "google" and (st.mode != "login" or not existing):
+        return done("recovery_unavailable", p)
+    if p == "google" and not prof["email_verified"]:
+        return done("email_unverified", p)
     if st.mode == "link":
         from .security import read_token
         uid = read_token(request.cookies.get(COOKIE))
@@ -204,11 +212,6 @@ def callback(p: str, request: Request, code: str = "", state: str = "", error: s
         apply_profile(existing, prof)
         audit(db, existing.user_id, None, f"oauth.login.{p}", f"user:{existing.user_id}", "", ip); commit(db)
         r = done("logged_in", p); set_session(r, existing.user_id); return r
-    if p == "google":
-        if not prof["email_verified"]: return done("email_unverified", p)
-        if db.scalar(select(User.id).where(User.email == prof["email"])):
-            # never auto-merge by email: the owner must log in with their password and link Google from Settings
-            return done("email_exists", p)
     u = User(username=unique_username(db, prof["handle"] or prof["email"].split("@")[0]),
              email=prof["email"] if p == "google" else f"x_{prof['subject']}{PLACEHOLDER_EMAIL}",
              password_hash="", display_name=(prof["name"] or prof["handle"] or "New member")[:50],
@@ -224,7 +227,10 @@ def unlink(p: str, request: Request, user: User = Depends(current_user), db: Ses
     if p not in PROVIDERS: raise HTTPException(404, "Unknown provider.")
     la = db.scalar(select(LinkedAccount).where(LinkedAccount.user_id == user.id, LinkedAccount.provider == p))
     if not la: raise HTTPException(404, "That account isn't linked.")
-    if login_methods(db, user) <= 1:
+    # Temporary Google recovery is not a durable replacement for X/password login.
+    remaining = int(has_password(user)) + (db.scalar(select(func.count(LinkedAccount.id)).where(
+        LinkedAccount.user_id == user.id, LinkedAccount.provider == "x", LinkedAccount.provider != p)) or 0)
+    if remaining < 1:
         raise HTTPException(400, "This is your only way to log in. Set a password or link another account first.")
     db.delete(la)
     audit(db, user.id, None, f"oauth.unlink.{p}", f"user:{user.id}", "", ip_of(request)); commit(db)

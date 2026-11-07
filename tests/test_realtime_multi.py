@@ -22,6 +22,7 @@ def two_instances():
     url = f"{base}/{dbname}"
     env = {**os.environ, "DATABASE_URL": url, "REALTIME_BACKEND": "postgres", "DISABLE_TRACKER": "1", "ENV": "development"}
     subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"], cwd=ROOT, env=env, check=True, capture_output=True)
+    subprocess.run([sys.executable, "-c", "from app.db import SessionLocal; from app.models import User; from app.security import hash_pw; db=SessionLocal(); db.add_all([User(username=n,display_name=n,email=n+'@example.invalid',password_hash=hash_pw('Sup3rSecret!pw')) for n in ('rt_alice','rt_bob')]); db.commit()"], cwd=ROOT, env=env, check=True)
     procs, ports = [], [free_port(), free_port()]
     for p in ports:
         procs.append(subprocess.Popen([sys.executable, "-m", "uvicorn", "app.main:app", "--port", str(p)], cwd=ROOT, env=env,
@@ -39,7 +40,7 @@ def two_instances():
 
 def signup(port, name):
     c = httpx.Client(base_url=f"http://127.0.0.1:{port}", headers={"x-csrf": "1"})
-    r = c.post("/api/auth/register", json={"username": name, "email": f"{name}@example.invalid", "password": "Sup3rSecret!pw", "display_name": name})
+    r = c.post("/api/auth/login", json={"login": name, "password": "Sup3rSecret!pw"})
     assert r.status_code == 200, r.text
     return c
 
