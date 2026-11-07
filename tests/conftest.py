@@ -14,6 +14,7 @@ os.environ["DATABASE_URL"] = PG or f"sqlite:///{DB}"
 os.environ["DISABLE_TRACKER"] = "1"
 os.environ["RANKINGS_TTL"] = "0"
 os.environ["ADMIN_USERNAMES"] = "padmin"
+os.environ["ENABLE_WALLET_FEATURES"] = "1"  # opt in only for legacy wallet-feature tests
 os.environ["UPLOAD_DIR"] = os.path.join(TMP, "uploads")
 # migration check: the schema used by every test is built by Alembic, not create_all
 subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"], cwd=ROOT, check=True, env=os.environ.copy())

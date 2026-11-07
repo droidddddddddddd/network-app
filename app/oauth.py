@@ -1,7 +1,7 @@
-"""Sign in / link with X (OAuth 2.0 + PKCE) and Google (OpenID Connect + PKCE + nonce).
+"""Public sign in / link with X (OAuth 2.0 + PKCE). Legacy Google callback support is retained for migration only.
 
-What this proves: the person controls that X or Google account. It is NOT a government identity check.
-What is stored: provider subject id, X handle / Google email, verified flags, X account age + follower count.
+What this proves: the person controls their X account. It is NOT a government identity check.
+What is stored: provider subject id, X handle, verified flag, X account age + follower count.
 Provider access/refresh tokens are used once to read the profile and then discarded; they are never stored.
 A provider whose CLIENT_ID/CLIENT_SECRET env vars are unset is disabled and its buttons are hidden."""
 import base64, hashlib, json, os, re, secrets
@@ -132,7 +132,9 @@ def profile_from(p: str, tokens: dict, nonce: str) -> dict:
 # ---------------------------------------------------------------- endpoints
 @router.get("/api/auth/oauth/providers")
 def providers():
-    return {p: enabled(p) for p in PROVIDERS}
+    # NETWORK's public authentication choice is X only. Google support remains in
+    # the legacy callback code solely to avoid corrupting already-linked records.
+    return {"x": enabled("x")}
 
 
 @router.get("/api/auth/oauth/{p}/start", dependencies=[rate_limit("oauth", 20, 600)])

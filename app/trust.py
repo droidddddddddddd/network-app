@@ -22,6 +22,12 @@ router = APIRouter()
 NONCE_TTL = timedelta(minutes=10)
 
 
+def require_wallet_features():
+    """Wallet connection/signature features are intentionally excluded from this release."""
+    if os.getenv("ENABLE_WALLET_FEATURES", "0").strip() != "1":
+        raise HTTPException(404, "Wallet features are not enabled in this NETWORK release.")
+
+
 def short(a: str) -> str:
     return f"{a[:4]}…{a[-4:]}" if a and len(a) > 10 else a
 
@@ -206,6 +212,7 @@ def build_message(db, user, purpose, address, subject):
 
 @router.post("/api/verify/nonce", dependencies=[rate_limit("nonce", 30, 600)])
 def issue_nonce(data: NonceIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    require_wallet_features()
     if not chain.valid_address(data.address): raise HTTPException(400, "That isn't a valid Solana address.")
     nonce, msg, subject = build_message(db, user, data.purpose, data.address, clean(data.subject, 120))
     db.add(Nonce(user_id=user.id, purpose=data.purpose, nonce=nonce, message=msg, address=data.address, subject=subject,
@@ -236,6 +243,7 @@ def upsert_verif(db, st, sid, kind, **kw):
 
 @router.post("/api/verify/wallet", dependencies=[rate_limit("verify_sig", 20, 600)])
 def verify_wallet(data: SignedIn, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    require_wallet_features()
     n = consume(db, user, data, "wallet")
     other = db.scalar(select(User).where(User.wallet_address == n.address, User.wallet_verified.is_(True), User.id != user.id))
     if other: commit(db); raise HTTPException(409, "This wallet is already verified by another account.")
@@ -326,6 +334,7 @@ def network_mint(db, n) -> str:
 
 @router.post("/api/networks/{slug}/verify/devwallet", dependencies=[rate_limit("verify_sig", 20, 600)])
 def verify_devwallet(slug: str, data: SignedIn, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    require_wallet_features()
     n = get_network(db, slug); founder_or_settings(db, n, user)
     nn = consume(db, user, data, "devwallet")
     mint = nn.subject
@@ -362,6 +371,7 @@ def recheck_devwallet(slug: str, request: Request, user: User = Depends(current_
 
 @router.post("/api/networks/{slug}/verify/metadata", dependencies=[rate_limit("verify_sig", 20, 600)])
 def verify_metadata(slug: str, data: SignedIn, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    require_wallet_features()
     n = get_network(db, slug); founder_or_settings(db, n, user)
     nn = consume(db, user, data, "metadata")
     mint = nn.subject
@@ -442,6 +452,7 @@ class ClaimIn(BaseModel):
 
 @router.post("/api/networks/{slug}/cto", dependencies=[rate_limit("cto", 10, 3600)])
 def create_claim(slug: str, data: ClaimIn, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    require_wallet_features()
     n = get_network(db, slug); founder_or_settings(db, n, user)
     if not chain.valid_address(data.mint): raise HTTPException(400, "Enter the token's mint address.")
     if db.scalar(select(CtoClaim.id).where(CtoClaim.network_id == n.id, CtoClaim.mint == data.mint)): raise HTTPException(409, "This Network already claims that token.")
@@ -551,6 +562,7 @@ def get_claim(cid: int, viewer: User | None = Depends(optional_user), db: Sessio
 
 @router.post("/api/cto/{cid}/back", dependencies=[rate_limit("verify_sig", 20, 600)])
 def back_claim(cid: int, data: SignedIn, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    require_wallet_features()
     ensure_active(user)
     c = db.get(CtoClaim, cid)
     if not c or c.status != "active": raise HTTPException(404, "Claim not found.")

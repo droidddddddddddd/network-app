@@ -40,17 +40,15 @@ services:
         sync: false
       - key: S3_PUBLIC_BASE_URL
         sync: false
-      # Sign in / link with X and Google (buttons stay hidden until both id and secret are set)
+      # Public sign-in with X only
       - key: PUBLIC_BASE_URL
         sync: false
       - key: X_CLIENT_ID
         sync: false
       - key: X_CLIENT_SECRET
         sync: false
-      - key: GOOGLE_CLIENT_ID
-        sync: false
-      - key: GOOGLE_CLIENT_SECRET
-        sync: false
+      - key: ENABLE_WALLET_FEATURES
+        value: "0"
       - key: REALTIME_BACKEND
         value: local
 databases:

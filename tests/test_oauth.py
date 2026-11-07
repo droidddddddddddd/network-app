@@ -83,14 +83,14 @@ XID = {"id": "9001", "username": "solana_sam", "name": "Sam"}
 
 def test_disabled_without_env(anon, monkeypatch):
     for k in ("X_CLIENT_ID", "X_CLIENT_SECRET", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"): monkeypatch.delenv(k, raising=False)
-    assert anon.ok("GET", "/api/auth/oauth/providers") == {"x": False, "google": False}
+    assert anon.ok("GET", "/api/auth/oauth/providers") == {"x": False}
     assert anon.get("/api/auth/oauth/x/start", follow_redirects=False).status_code == 404
     monkeypatch.setenv("X_CLIENT_ID", "only-id")  # half-configured still counts as disabled
     assert anon.ok("GET", "/api/auth/oauth/providers")["x"] is False
 
 
 def test_x_signup_login_and_passport(anon, fake, mk):
-    assert anon.ok("GET", "/api/auth/oauth/providers") == {"x": True, "google": True}
+    assert anon.ok("GET", "/api/auth/oauth/providers") == {"x": True}
     assert flow(anon, fake, "x", XID) == "signed_up"
     me = anon.ok("GET", "/api/me")
     assert me["username"] == "solana_sam" and me["email"] == "" and me["has_password"] is False

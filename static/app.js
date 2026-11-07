@@ -90,7 +90,7 @@ function shell() {
         <a class="iconbtn" href="#/messages" aria-label="Messages">${ic('msg')}<span class="dot hidden" data-badge="messages"></span></a>
         <a class="iconbtn desktop-only" href="#/notifications" aria-label="Notifications">${ic('bell')}<span class="dot hidden" data-badge="notifications"></span></a>
         <div class="menu"><button class="iconbtn" data-act="usermenu" aria-label="Account">${avatar(me, 'sm')}</button></div>`
-        : `<a class="btn" href="#/login">Log in</a><a class="btn primary" href="#/signup">Join</a>`}
+        : `<a class="btn primary" href="#/login">𝕏 Sign in with X</a>`}
       </header>
       <div class="content" id="content"><div class="col" id="center"></div><div class="col right" id="right"></div></div>
     </div>
@@ -111,7 +111,7 @@ function sidePassport() {
   const me = S.me;
   el.innerHTML = me ? `<a class="card pp" href="#/passport/${esc(me.username)}" style="display:block">
       <div class="row">${avatar(me)}<div class="grow"><div class="row" style="gap:6px"><b>Network Passport</b></div>
-      <div class="tiny muted">${esc(me.display_name)} · ${(me.linked_accounts || []).length ? esc(me.linked_accounts.map(a => a.provider === 'x' ? 'X linked' : 'Google linked').join(' · ')) : 'No accounts linked'}</div></div></div>
+      <div class="tiny muted">${esc(me.display_name)} · ${(me.linked_accounts || []).length ? esc(me.linked_accounts.map(a => a.provider === 'x' ? 'X linked' : 'Legacy account linked').join(' · ')) : 'No accounts linked'}</div></div></div>
       <div class="row between small" style="margin-top:10px"><span>Level ${me.level}</span><span class="muted">${kfmt(me.xp)} XP →</span></div>
       <div class="bar"><i style="width:${Math.round(Math.min(1, me.level_progress) * 100)}%"></i></div></a>`
     : `<div class="card pp"><b>Network Passport</b><p class="small muted">Your credibility page: networks, endorsements, contributions.</p><a class="btn primary sm block" href="#/signup">Create your Passport</a></div>`;
@@ -353,30 +353,37 @@ window.addEventListener('hashchange', route);
 function authPage(c, mode) {
   const signup = mode === 'signup';
   c.innerHTML = `<div class="auth"><a class="logo" href="#/" style="justify-content:center;margin-bottom:18px"><img src="/static/img/logo.svg" alt="">NETWORK</a>
-  <div class="card"><h2 style="margin-top:0">${signup ? 'Create your Network Passport' : 'Welcome back'}</h2>
+  <div class="card"><h2 style="margin-top:0">${signup ? 'Join NETWORK' : 'Welcome back'}</h2>
   <p class="muted small">Build Your Network. Build Your Net Worth.</p>
-  <div id="oab"></div>
-  <form id="af">${signup ? `<label class="f"><span>Username</span><input class="in" name="username" required minlength="3" maxlength="20" pattern="[A-Za-z0-9_]{3,20}" autocomplete="username"></label>
-  <label class="f"><span>Display name</span><input class="in" name="display_name" maxlength="50"></label>
-  <label class="f"><span>Email</span><input class="in" name="email" type="email" required maxlength="254" autocomplete="email"></label>`
-  : `<label class="f"><span>Username or email</span><input class="in" name="login" required maxlength="254" autocomplete="username"></label>`}
-  <label class="f"><span>Password</span><input class="in" name="password" type="password" required minlength="${signup ? 8 : 1}" maxlength="128" autocomplete="${signup ? 'new-password' : 'current-password'}"></label>
-  ${signup ? '<p class="tiny muted">8+ characters with at least one letter and one number. NETWORK never asks for seed phrases or private keys.</p>' : ''}
-  <div class="err"></div><button class="btn primary block" type="submit">${signup ? 'Create account' : 'Log in'}</button></form>
-  <p class="small muted" style="text-align:center">${signup ? 'Already have an account? <a class="green" href="#/login">Log in</a>' : 'New here? <a class="green" href="#/signup">Create an account</a>'}</p>
-  ${signup ? '' : '<p class="tiny muted" style="text-align:center">Local demo accounts: <b>alpha_annie</b> or <b>solsurfer</b>, password <b>demo1234</b> (DEMO data).</p>'}
+  <p class="small">Sign in or create your Network Passport securely with your X account.</p>
+  <div id="oab"><div class="muted small" style="text-align:center">Loading X sign-in…</div></div>
+  <p class="tiny muted" style="text-align:center">NETWORK uses X to confirm account ownership. It does not post to X on your behalf.</p>
   </div></div>`;
-  oauthProviders().then(pv => { const b = $('#oab'); if (b && (pv.x || pv.google)) b.innerHTML = oauthButtons(pv, 'login') + '<p class="tiny muted" style="text-align:center">Signs you in by proving you own that account (no posting access). Not a government ID check. Or use a password:</p>'; });
-  const f = $('#af');
-  f.addEventListener('submit', e => { e.preventDefault(); submitForm(f, async () => {
-    const body = signup ? { username: fval(f, 'username'), display_name: fval(f, 'display_name'), email: fval(f, 'email'), password: f.elements.password.value }
-      : { login: fval(f, 'login'), password: f.elements.password.value };
-    S.me = await api(signup ? '/auth/register' : '/auth/login', { body });
-    shell(); connectWS(); location.hash = signup ? '#/welcome' : '#/'; if (!signup) route();
-  }); });
+  oauthProviders().then(pv => {
+    const b = $('#oab');
+    if (!b) return;
+    b.innerHTML = pv.x ? oauthButtons(pv, 'login') : '<p class="err">X sign-in is not configured yet. Please try again later.</p>';
+  });
 }
 on(/^\/login$/, c => authPage(c, 'login'), { bare: true });
 on(/^\/signup$/, c => authPage(c, 'signup'), { bare: true });
+
+// Hidden migration route: existing password-only members can sign in once and link X in Settings.
+// It is deliberately not linked from the public sign-in screen or site navigation.
+function legacyLoginPage(c) {
+  c.innerHTML = `<div class="auth"><a class="logo" href="#/" style="justify-content:center;margin-bottom:18px"><img src="/static/img/logo.svg" alt="">NETWORK</a>
+    <div class="card"><h2 style="margin-top:0">Existing account recovery</h2><p class="muted small">For members who created a password account before X-only sign-in. Sign in, then open Settings and link your X account.</p>
+    <form id="legacyf"><label class="f"><span>Username or email</span><input class="in" name="login" required maxlength="254" autocomplete="username"></label>
+    <label class="f"><span>Password</span><input class="in" type="password" name="password" required maxlength="128" autocomplete="current-password"></label>
+    <div class="err"></div><button class="btn primary block" type="submit">Recover existing account</button></form>
+    <p class="tiny muted"><a class="green" href="#/login">Back to X sign-in</a></p></div></div>`;
+  const f = $('#legacyf');
+  f.addEventListener('submit', e => { e.preventDefault(); submitForm(f, async () => {
+    S.me = await api('/auth/login', { body: { login: fval(f, 'login'), password: f.elements.password.value } });
+    shell(); connectWS(); location.hash = '#/settings'; route();
+  }); });
+}
+on(/^\/legacy-login$/, c => legacyLoginPage(c), { bare: true });
 
 // ---------------------------------------------------------------- home (My Network Feed)
 function heroHTML() {
@@ -510,12 +517,12 @@ const linkedCard = (u) => (u.linked_accounts || []).length ? `<div class="card">
   <p class="tiny muted">Account-ownership linking via OAuth sign-in, not a government ID check. X account age and follower count are shown as light context against throwaway accounts; they add no reputation and can't be bought.</p></div>` : '';
 let OAUTHP = null;
 const oauthProviders = async () => OAUTHP || (OAUTHP = await api('/auth/oauth/providers').catch(() => ({})));
-const oauthButtons = (pv, mode) => (pv.x || pv.google) ? `<div class="oauth">${pv.x ? `<a class="btn block" href="/api/auth/oauth/x/start?mode=${mode}">𝕏 Continue with X</a>` : ''}${pv.google ? `<a class="btn block" href="/api/auth/oauth/google/start?mode=${mode}" style="margin-top:8px">G Continue with Google</a>` : ''}</div>` : '';
+const oauthButtons = (pv, mode) => pv.x ? `<div class="oauth"><a class="btn primary block" href="/api/auth/oauth/x/start?mode=login">𝕏 Continue with X</a></div>` : '';
 const OAUTH_MSG = { logged_in: 'Logged in.', signed_up: 'Welcome! Your Network Passport was created from your linked account.', linked: 'Account linked to your Passport.',
   bad_state: 'That sign-in link was invalid or already used. Please try again.', expired: 'The sign-in took too long. Please try again.', denied: 'Sign-in was cancelled.',
   provider_error: "The provider didn't confirm the sign-in. Please try again.", session_changed: 'Your session changed during sign-in. Please try again.',
   taken: 'That account is already linked to a different NETWORK Passport.', already_linked: 'You already have an account of this type linked. Unlink it first.',
-  email_unverified: "Google hasn't verified that email address, so it can't be used.", email_exists: 'A NETWORK account already uses that email. Log in with your password, then link Google from Settings.',
+  email_unverified: 'This legacy sign-in method is unavailable.', email_exists: 'An existing NETWORK account uses this email. Contact support to recover access.',
   login_required: 'Log in first to link an account.' };
 on(/^\/oauth\/(\w+)\/(\w+)$/, async (c, code, p) => {
   const ok = ['logged_in', 'signed_up', 'linked'].includes(code);
@@ -770,7 +777,7 @@ async function passport(c, name, tab = 'passport') {
     <div class="row wrap">${u.is_me ? '<a class="btn sm" href="#/settings">Edit profile & privacy</a>' : S.me ? `<button class="btn primary sm" data-act="follow" data-user="${esc(u.username)}">${u.is_following ? 'Connected ✓' : 'Connect'}</button><a class="btn sm" href="#/messages/${esc(u.username)}">Message</a><button class="btn sm" id="endbtn">Endorse</button><button class="btn danger sm" data-act="block-user" data-user="${esc(u.username)}" data-blocked="${u.blocked ? 1 : 0}">${u.blocked ? 'Unblock' : 'Block'}</button>` : ''}</div></div>
     <h2 style="margin:8px 0 0">${esc(u.display_name)} ${demo(u)}</h2><div class="small muted">@${esc(u.username)} · Network Passport · member since ${new Date(u.created_at).toLocaleDateString()}</div>
     <p>${rich(u.bio)}</p>
-    <div class="row wrap small">${u.x_handle ? `<a class="green" href="https://x.com/${esc(u.x_handle)}" target="_blank" rel="noopener nofollow">X @${esc(u.x_handle)}</a>` : ''}${u.telegram ? `<a class="green" href="https://t.me/${esc(u.telegram)}" target="_blank" rel="noopener nofollow">Telegram @${esc(u.telegram)}</a>` : ''}${u.website ? `<a class="green" href="${esc(u.website)}" target="_blank" rel="noopener nofollow">${esc(u.website.replace(/^https?:\/\//, ''))}</a>` : ''}${u.wallet_address ? `<span class="muted" title="Self-reported, not ownership-verified unless marked">Wallet ${esc(u.wallet_address.slice(0, 4))}…${esc(u.wallet_address.slice(-4))}</span>` : ''}</div>
+    <div class="row wrap small">${u.x_handle ? `<a class="green" href="https://x.com/${esc(u.x_handle)}" target="_blank" rel="noopener nofollow">X @${esc(u.x_handle)}</a>` : ''}${u.telegram ? `<a class="green" href="https://t.me/${esc(u.telegram)}" target="_blank" rel="noopener nofollow">Telegram @${esc(u.telegram)}</a>` : ''}${u.website ? `<a class="green" href="${esc(u.website)}" target="_blank" rel="noopener nofollow">${esc(u.website.replace(/^https?:\/\//, ''))}</a>` : ''}</div>
     <div class="row wrap" style="gap:18px;margin-top:8px"><span class="stat"><b>Lv ${r.level}</b>${kfmt(r.xp)} XP earned</span><span class="stat"><b>${u.followers}</b>Network Members</span><span class="stat"><b>${u.following}</b>Connected</span><span class="stat"><b>${ind.endorsements.value}</b>Endorsements</span></div>
     <div class="bar" style="max-width:320px"><i style="width:${Math.round(r.level_progress * 100)}%"></i></div></div>
     <div class="tabs" style="padding:0 10px"><a href="#/passport/${esc(u.username)}" class="${tab === 'passport' ? 'on' : ''}">Passport</a><a href="#/u/${esc(u.username)}" class="${tab === 'posts' ? 'on' : ''}">Network Posts</a></div></div><div id="ptab" style="margin-top:14px"></div>`;
@@ -784,7 +791,7 @@ async function passport(c, name, tab = 'passport') {
   if (tab === 'posts') return loadFeed(el, `/users/${u.username}/posts`, 'No Network Posts yet.');
   const hidden = u.hidden_sections.length ? `<p class="tiny muted">@${esc(u.username)} keeps some Passport sections private.</p>` : '';
   el.innerHTML = `<div class="card"><h3 style="margin-top:0">Verification</h3><div class="small">${verifLine(u.verification)}</div><p class="tiny muted">Each verification type is separate. ${esc(t.label)}.</p>
-    ${u.is_me ? `<div class="row wrap"><button class="btn sm" id="wsign">${u.verification.wallet.verified ? 'Re-verify wallet (sign message)' : 'Verify wallet ownership (sign message)'}</button></div><p class="tiny muted">Uses your wallet's "Sign message" only: no transaction, no fees, and NETWORK never asks for seed phrases or private keys. Wallet ownership verified proves control of the wallet only, not trustworthiness or trading performance. Link X or Google in <a class="green" href="#/settings">Settings</a> to show account-ownership badges (not a government ID check).</p>` : S.me ? `<button class="btn ghost sm" data-report="user" data-target="${esc(u.username)}">Report @${esc(u.username)}</button>` : ''}</div>
+    ${S.me && !u.is_me ? `<button class="btn ghost sm" data-report="user" data-target="${esc(u.username)}">Report @${esc(u.username)}</button>` : ''}</div>
     ${linkedCard(u)}
     <div class="card"><h3 style="margin-top:0">Reputation indicators</h3><div class="indic">${indicCard('Engagement quality', ind.engagement_quality.value, ind.engagement_quality.detail)}${indicCard('Collaboration history', ind.collaboration_history.value, ind.collaboration_history.detail)}
       ${indicCard('Fulfilled commitments', ind.fulfilled_commitments.value, ind.fulfilled_commitments.detail)}${indicCard('Reliability', ind.reliability.value, ind.reliability.detail, pct)}${indicCard('Community contributions', ind.community_contributions.value, ind.community_contributions.detail)}
@@ -796,7 +803,7 @@ async function passport(c, name, tab = 'passport') {
       ${u.endorsements.map(e => `<div class="li small">${avatar(e.from, 'sm')}<div class="grow"><a href="#/u/${esc(e.from.username)}">@${esc(e.from.username)}</a> endorsed for <b>${esc(e.category)}</b>${e.note ? `: “${esc(e.note)}”` : ''}<div class="tiny muted">${ago(e.created_at)}</div></div></div>`).join('')}</div>` : ''}
     ${u.collaborations.length ? `<div class="card"><h3 style="margin-top:0">Collaboration history</h3>${u.collaborations.map(x => `<a class="li small" href="#/opportunities/${x.opportunity_id}"><span class="grow"><b>${esc(x.title)}</b> with @${esc(x.with.username)} · ${esc(x.category)}</span><span class="pill ${x.status === 'completed' ? 'g' : 'a'}">${esc(x.status)}</span></a>`).join('')}</div>` : ''}
     ${u.calls.length ? `<div class="card"><h3 style="margin-top:0">Token calls</h3>${u.calls.slice(0, 5).map(callCard).join('')}</div>` : ''}`;
-  $('#wsign')?.addEventListener('click', () => verifyWalletFlow());
+  // Wallet connection/signing is intentionally not part of this release.
 }
 on(/^\/passport\/(\w+)$/, (c, n) => passport(c, n, 'passport'), { k: 'me' });
 on(/^\/u\/(\w+)$/, (c, n) => passport(c, n, 'posts'), { k: 'me' });
@@ -804,18 +811,17 @@ on(/^\/me$/, c => passport(c, S.me.username, 'passport'), { k: 'me', auth: true 
 
 on(/^\/settings$/, c => {
   const m = S.me, pv = m.privacy;
-  const PL = { show_wallet: 'Wallet address', show_socials: 'Social links', show_networks: 'Networks founded / joined / connected', show_endorsements: 'Endorsements received', show_contributions: 'Contributions & collaboration history', show_achievements: 'Achievements' };
+  const PL = { show_socials: 'Social links', show_networks: 'Networks founded / joined / connected', show_endorsements: 'Endorsements received', show_contributions: 'Contributions & collaboration history', show_achievements: 'Achievements' };
   c.innerHTML = `<div class="card"><h2 style="margin-top:0">Edit profile</h2><form id="sf">
   <div class="row">${avatar(m, 'lg')}<label class="f grow"><span>Profile picture</span><input type="file" accept="image/*" data-up="avatar_url"></label></div><input type="hidden" name="avatar_url" value="${esc(m.avatar_url || '')}">
   <label class="f"><span>Display name</span><input class="in" name="display_name" required maxlength="50" value="${esc(m.display_name)}"></label>
   <label class="f"><span>Bio</span><textarea class="in" name="bio" maxlength="300" rows="3">${esc(m.bio)}</textarea></label>
   <div class="row wrap"><label class="f grow"><span>X handle</span><input class="in" name="x_handle" maxlength="20" value="${esc(m.x_handle)}"></label><label class="f grow"><span>Telegram</span><input class="in" name="telegram" maxlength="40" value="${esc(m.telegram)}"></label></div>
   <label class="f"><span>Website</span><input class="in" name="website" maxlength="200" value="${esc(m.website)}" placeholder="https://"></label>
-  <label class="f"><span>Solana wallet address (optional, public address only)</span><input class="in" name="wallet_address" maxlength="64" value="${esc(m.wallet_address)}"></label>
-  <p class="tiny muted">Never share a seed phrase or private key. NETWORK will never ask for them. A wallet entered here is not "verified" ownership.</p>
+  
   <h3>Passport privacy: show publicly</h3>${Object.entries(PL).map(([k, l]) => `<label class="row small" style="margin:6px 0"><input type="checkbox" name="${k}" ${pv[k] ? 'checked' : ''}> ${l}</label>`).join('')}
   <div class="err"></div><button class="btn primary" type="submit">Save</button> <a class="btn ghost" href="#/welcome">Change role & interests</a></form></div>
-  <div class="card" id="linked"><h2 style="margin-top:0">Linked accounts & login</h2><p class="tiny muted">Linking proves you own an X or Google account (account ownership, not a government ID). NETWORK stores only the account id, handle or email and the verified flag, never your tokens, and never asks for seed phrases or private keys.</p><div id="lal">Loading…</div>
+  <div class="card" id="linked"><h2 style="margin-top:0">Linked accounts & login</h2><p class="tiny muted">Linking proves you control your X account. NETWORK does not request wallet access or transaction permissions.</p><div id="lal">Loading…</div>
   <h3>Password</h3><form id="pwf">${m.has_password ? '<label class="f"><span>Current password</span><input class="in" type="password" name="current" required maxlength="128" autocomplete="current-password"></label>' : '<p class="tiny muted">You sign in with a linked account. Set a password to also log in with your username.</p>'}
   <label class="f"><span>New password</span><input class="in" type="password" name="password" required minlength="8" maxlength="128" autocomplete="new-password"></label><div class="err"></div><button class="btn sm" type="submit">${m.has_password ? 'Change password' : 'Set password'}</button></form></div>
   <div id="pwa-card"></div>
@@ -825,7 +831,7 @@ on(/^\/settings$/, c => {
   oauthProviders().then(pv => {
     const la = m.linked_accounts || [], has = p => la.find(a => a.provider === p);
     const methods = la.length + (m.has_password ? 1 : 0);
-    $('#lal').innerHTML = ['x', 'google'].map(p => { const a = has(p), nm = p === 'x' ? 'X' : 'Google';
+    $('#lal').innerHTML = ['x'].map(p => { const a = has(p), nm = 'X';
       if (a) return `<div class="li small"><span class="pill g">✓ ${esc(a.label)}</span><span class="grow tiny muted">${p === 'google' ? esc(a.email || '') : ''}</span>
         ${p === 'google' ? `<label class="tiny row"><input type="checkbox" data-showemail ${a.show_email ? 'checked' : ''}> Show email on Passport</label>` : ''}
         <button class="btn ghost sm" data-unlink="${p}" ${methods < 2 ? 'disabled title="Keep at least one way to log in: set a password or link another account first."' : ''}>Unlink</button></div>`;
@@ -839,7 +845,7 @@ on(/^\/settings$/, c => {
   const pf = $('#pwf'); pf.addEventListener('submit', e => { e.preventDefault(); submitForm(pf, async () => {
     await api('/me/password', { body: { current: pf.elements.current ? pf.elements.current.value : '', password: pf.elements.password.value } }); S.me = await api('/me'); toast('Password saved'); route(); }); });
   f.addEventListener('submit', e => { e.preventDefault(); submitForm(f, async () => {
-    const body = { display_name: fval(f, 'display_name'), bio: fval(f, 'bio'), avatar_url: fval(f, 'avatar_url'), x_handle: fval(f, 'x_handle').replace(/^@/, ''), telegram: fval(f, 'telegram'), website: fval(f, 'website'), wallet_address: fval(f, 'wallet_address') };
+    const body = { display_name: fval(f, 'display_name'), bio: fval(f, 'bio'), avatar_url: fval(f, 'avatar_url'), x_handle: fval(f, 'x_handle').replace(/^@/, ''), telegram: fval(f, 'telegram'), website: fval(f, 'website'),  };
     Object.keys(PL).forEach(k => body[k] = fval(f, k));
     S.me = await api('/me', { method: 'PUT', body }); toast('Profile saved'); shell(); route(); }); });
 }, { k: 'me', auth: true });

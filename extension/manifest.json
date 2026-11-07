@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "NETWORK — X Companion",
+  "version": "0.1.0",
+  "description": "Open your NETWORK social crypto intelligence workspace alongside X.",
+  "permissions": ["sidePanel", "storage"],
+  "host_permissions": [
+    "https://x.com/*",
+    "https://twitter.com/*",
+    "https://network-app-65f6.onrender.com/*"
+  ],
+  "background": {"service_worker": "background.js"},
+  "action": {"default_title": "Open NETWORK"},
+  "side_panel": {"default_path": "sidepanel.html"},
+  "content_scripts": [{
+    "matches": ["https://x.com/*", "https://twitter.com/*"],
+    "js": ["content.js"],
+    "run_at": "document_idle"
+  }]
+}

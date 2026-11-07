@@ -1,35 +1,8 @@
-/* NETWORK trust features: wallet signing (signMessage only), domain/dev-wallet/metadata verification, CTO backing,
-   moderation queues, shared activity, achievements. Loaded after app.js; all checks are enforced server-side. */
+/* NETWORK trust features: project-domain checks, read-only creator evidence, moderation queues,
+   shared activity, and achievements. Wallet signing is excluded from this release. */
 'use strict';
-const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
-function b58(bytes) {
-  let n = 0n; for (const b of bytes) n = n * 256n + BigInt(b);
-  let out = ''; while (n > 0n) { out = B58[Number(n % 58n)] + out; n /= 58n; }
-  for (const b of bytes) { if (b !== 0) break; out = '1' + out; }
-  return out;
-}
 const shortAddr = a => a && a.length > 10 ? `${a.slice(0, 4)}…${a.slice(-4)}` : (a || '');
 const updatedAgo = t => { if (!t) return 'just now'; const m = Math.floor((Date.now() - new Date(t)) / 60000); return m < 1 ? 'just now' : m === 1 ? '1 min ago' : m < 60 ? `${m} min ago` : `${Math.floor(m / 60)} h ago`; };
-
-function walletProvider() {
-  const p = window.phantom?.solana || window.solflare || window.backpack || window.solana;
-  return p && typeof p.signMessage === 'function' ? p : null;
-}
-/* Asks the browser wallet to SIGN A MESSAGE. Never a transaction. Returns {nonce, signature} for the server to verify. */
-async function solSign(purpose, subject = '') {
-  const w = walletProvider();
-  if (!w) throw new Error('No Solana wallet found in this browser. Install Phantom, Solflare or Backpack, then try again. (Message signing only, no transaction.)');
-  const res = await w.connect();
-  const address = (res?.publicKey || w.publicKey).toString();
-  const ch = await api('/verify/nonce', { body: { purpose, address, subject } });
-  const signed = await w.signMessage(new TextEncoder().encode(ch.message), 'utf8');
-  const sig = signed.signature || signed;
-  return { nonce: ch.nonce, signature: b58(new Uint8Array(sig)), address };
-}
-async function verifyWalletFlow() {
-  if (!confirm('Your wallet will ask you to SIGN A MESSAGE (not a transaction, no fees). NETWORK never asks for your seed phrase or private key. Continue?')) return;
-  try { const s = await solSign('wallet'); await api('/verify/wallet', { body: { nonce: s.nonce, signature: s.signature } }); toast('Wallet ownership verified'); S.me = await api('/me'); route(); } catch (e) { fail(e); }
-}
 
 function suspendedBanner(c) {
   if (!S.me || !S.me.suspended || !c || c.querySelector('.susp')) return;
@@ -90,21 +63,11 @@ async function tokenTrustPanel(el, n, P_) {
     ${ev.summary ? `<p class="small" style="margin:4px 0 0">${esc(ev.summary)}</p>` : ''}
     ${ev.flows && ev.flows.recent.length ? `<details class="small"><summary class="muted">Dev wallet token history (${ev.flows.checked_txs} transactions checked)</summary>${ev.flows.recent.slice().reverse().map(e => `<div class="li tiny"><span class="pill ${e.kind === 'sold' ? 'r' : e.kind === 'transferred' ? 'a' : ''}">${esc(e.kind.replace(/_/g, ' '))}</span><span class="grow">${kfmt(e.amount)}${e.venue ? ' via ' + esc(e.venue) : ''}${e.to ? ' to ' + e.to.slice(0, 2).map(w => `<a class="green" href="https://solscan.io/account/${esc(w)}" target="_blank" rel="noopener nofollow">${esc(shortAddr(w))}</a>`).join(', ') : ''}</span><a class="muted" href="https://solscan.io/tx/${esc(e.signature)}" target="_blank" rel="noopener nofollow">${e.block_time ? ago(e.block_time * 1000) : 'tx'}</a></div>`).join('')}<p class="tiny muted">Sold = the tokens left in a swap through a DEX program (pump.fun, PumpSwap, Raydium, Jupiter, Meteora, Orca). Transferred = sent to another wallet with no swap; that wallet may also belong to the dev.</p></details>` : ''}` : ''}
     <div class="factor"><span><b>Metadata authority</b></span>${st(t.metadata)}</div>
-    ${manage ? `<form id="mintf" class="row wrap" style="margin-top:10px"><input class="in grow" name="mint" placeholder="Token mint address" value="${esc(t.mint || '')}" maxlength="44">
-      <button class="btn sm" type="button" data-sig="devwallet">Verify dev wallet (sign)</button>${t.devwallet ? '<button class="btn sm" type="button" id="devre">Re-check</button>' : ''}<button class="btn sm" type="button" data-sig="metadata">Verify metadata authority (sign)</button><button class="btn ghost sm" type="button" id="ctonew">Start a CTO claim</button><div class="err" style="width:100%"></div></form>` : ''}
+    ${manage ? `<form id="mintf" class="row wrap" style="margin-top:10px"><input class="in grow" name="mint" placeholder="Token mint address" value="${esc(t.mint || '')}" maxlength="44"><p class="tiny muted" style="width:100%">Wallet verification and holder-backed claims are not enabled in this release. Read-only token and creator research remains available.</p></form>` : ''}
     <h4>Community takeover claims</h4>${t.claims.length ? t.claims.map(x => `<a class="li small" href="${esc(x.link)}">${netAv(x.network, 'sm')}<span class="grow"><b>${esc(x.network.name)}</b> · <span class="pill ${x.verified ? 'g' : ''}">${esc(x.label)}</span><div class="tiny muted">${esc(x.role)}</div></span></a>`).join('') : '<p class="small muted">No CTO claims on this token.</p>'}</div>`;
-  const mintOf = () => ($('#mintf')?.elements.mint.value || '').trim();
   $('#domf')?.addEventListener('submit', e => { e.preventDefault(); const f = e.target; submitForm(f, async () => { const r = await api(`/networks/${n.slug}/verify/domain`, { body: { domain: fval(f, 'domain') } });
     $('#domi').innerHTML = `Add <b>one</b> of these, then press Check now:<br>DNS TXT record on <b>${esc(r.domain)}</b>: <code>${esc(r.txt)}</code><br>or a file at <code>${esc(r.file_url)}</code> containing <code>${esc(r.file_content)}</code>`; }); });
   $('#domchk')?.addEventListener('click', async () => { try { const r = await api(`/networks/${n.slug}/verify/domain/check`, { body: {} }); toast(r.detail, !r.verified); route(); } catch (e) { fail(e); } });
-  el.querySelectorAll('[data-sig]').forEach(b => b.onclick = async () => {
-    const mint = mintOf(); if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(mint)) return toast('Enter the token mint address first.', true);
-    if (!confirm('Your wallet will ask you to SIGN A MESSAGE with the ' + (b.dataset.sig === 'devwallet' ? 'wallet that created the token' : 'metadata update-authority wallet') + '. No transaction, no fees. Continue?')) return;
-    try { const s = await solSign(b.dataset.sig, mint); const r = await api(`/networks/${n.slug}/verify/${b.dataset.sig}`, { body: { nonce: s.nonce, signature: s.signature } }); toast(r.detail, !r.verified); route(); } catch (e) { fail(e); }
-  });
-  $('#devre')?.addEventListener('click', async () => { try { const r = await api(`/networks/${n.slug}/verify/devwallet/recheck`, { body: {} }); toast(r.detail, !r.verified); route(); } catch (e) { fail(e); } });
-  $('#ctonew')?.addEventListener('click', async () => { const mint = mintOf(); if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(mint)) return toast('Enter the token mint address first.', true);
-    try { const r = await api(`/networks/${n.slug}/cto`, { body: { mint } }); toast('CTO claim created. Share the "Back this CTO" link with holders.'); location.hash = r.link; } catch (e) { fail(e); } });
 }
 
 on(/^\/cto\/(\d+)$/, async (c, id) => {
@@ -115,14 +78,11 @@ on(/^\/cto\/(\d+)$/, async (c, id) => {
     <p><span class="pill ${x.verified ? 'g' : 'a'}">${esc(x.label)}</span></p>
     <p class="tiny muted">${esc(x.what_it_means)} Threshold: ${res.threshold ? `${res.threshold.wallets} distinct wallets holding ${res.threshold.pct}%` : 'set by the server'} of circulating supply (curve, pool, dev and burned tokens excluded). Balances are read live at each check, so selling drops support.</p>
     ${x.dev_verification ? `<p class="small">Separately: <span class="pill g">${esc(x.dev_verification.detail)}</span> (${esc(x.dev_verification.network.name)})</p>` : ''}
-    ${S.me ? `<div class="card" style="background:transparent"><b>Back this CTO</b><p class="small">Your wallet will sign this exact text (plus a one-time code). No transaction, no fees:</p><code class="small">${esc(x.support_text)}</code>
-      <div class="row wrap" style="margin-top:8px"><button class="btn primary" id="backb">${x.my_backing ? 'Re-sign backing' : 'Sign to back this claim'}</button><button class="btn sm" id="rechk">Re-check now</button></div>${x.my_backing ? `<p class="tiny green">You back this claim with ${esc(x.my_backing)}.</p>` : ''}<p class="tiny muted">One backing per wallet per token; backing another claim moves your support. Wallets created in the last 24h count at 50% and not toward the wallet minimum.</p></div>` : '<a class="btn primary" href="#/login">Log in to back this claim</a>'}
+    <div class="card" style="background:transparent"><b>Wallet-backed claims</b><p class="small muted">Holder signing and wallet connections are not enabled in this release. This historical claim is shown for reference only.</p></div>
   </div>
   <div class="card"><h3 style="margin-top:0">Backers</h3>${res.checked_at ? `<p class="tiny muted">Checked ${updatedAgo(res.checked_at)} · ${res.distinct} counted wallets · ${(res.pct || 0).toFixed(2)}% of circulating supply${res.shared_funder_pct ? ` · ${res.shared_funder_pct}% of backing comes from wallets that share a first funder` : ''}</p>` : '<p class="tiny muted">Not checked yet.</p>'}
     <table class="table"><thead><tr><th>Wallet</th><th>Balance now</th><th>Counted</th></tr></thead><tbody>${(res.backers || []).map(b => `<tr><td style="font-family:monospace">${esc(b.wallet)}</td><td>${kfmt(b.amount)}</td><td class="small">${b.counted ? '✓' : '—'} ${esc(b.note || '')}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">No backers yet.</td></tr>'}</tbody></table></div>
   <div class="card"><h3 style="margin-top:0">All claims on this token</h3>${x.claims.map(k => `<a class="li small" href="${esc(k.link)}">${netAv(k.network, 'sm')}<span class="grow"><b>${esc(k.network.name)}</b> <span class="pill ${k.role === 'leading claim' ? 'g' : ''}">${esc(k.role)}</span><div class="tiny muted">${esc(k.label)}</div></span></a>`).join('')}</div>`;
-  $('#backb')?.addEventListener('click', async () => { if (!confirm('Sign a message (not a transaction) to back this claim?')) return;
-    try { const s = await solSign('cto_back', String(x.id)); const r = await api(`/cto/${x.id}/back`, { body: { nonce: s.nonce, signature: s.signature } }); toast(r.switched ? 'Backing moved to this claim' : 'Backing recorded'); route(); } catch (e) { fail(e); } });
   $('#rechk')?.addEventListener('click', async () => { try { await api(`/cto/${x.id}/recheck`, { body: {} }); toast('Re-checked with live balances'); route(); } catch (e) { fail(e); } });
 }, { k: 'networks' });
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.4.0-beta (2026-11-07)
+- Public sign-in is X only (OAuth 2.0 + PKCE). Password accounts can recover via the unlinked `#/legacy-login` route, then link X. Google buttons removed; legacy Google records are kept.
+- Wallet signing, wallet verification and CTO holder backing are switched off (`ENABLE_WALLET_FEATURES=0`; those APIs return 404). Read-only token and creator research stays.
+- Wallet address field and its privacy toggle removed from profile settings.
+- Added `extension/`: an experimental Chrome side-panel starter for X (not yet functional, see README).
+- Added RELEASE_SCOPE.md and BUILD_NOTES.md.
+
 ## v0.3.1-beta (2026-11-02)
 New official NETWORK logo: a node-style "N".
 - Hand-built SVG mark: four neon-green (`#22f08a`, the app's `--green`) nodes joined by a left vertical, a top-left to bottom-right diagonal and a right vertical, so it reads clearly as an N. It stays legible at 16px.
@@ -63,3 +70,12 @@ First deployable beta.
 - Achievements & XP page replaces the old Rewards placeholder.
 - DB-backed rate limiter. Single-instance pin documented in render.yaml.
 - Demo seed refuses to run in production unless `SEED_DEMO=true`.
+
+## v0.4.0-beta (2026-11-05)
+- Public sign-in / signup UI now offers X only. First X authorization creates a Passport; later authorizations log in.
+- OAuth provider discovery advertises only X. Legacy Google callback code and legacy account data are retained for migration safety but are no longer exposed as a public login option.
+- Wallet connection/signature features are excluded from this release. Wallet-dependent API endpoints return 404 unless `ENABLE_WALLET_FEATURES=1`; Render defaults this setting to `0`.
+- Removed wallet entry/signing controls from the public profile and Project Network trust UI. Read-only Solana market and creator research remain.
+- Added a Chrome Manifest V3 X companion launcher and side panel for the existing NETWORK app.
+- Added `RELEASE_SCOPE.md` and `BUILD_NOTES.md`; updated deployment and testing instructions.
+- No live-trading, swap, buy/sell, or transaction-execution functionality is included.
